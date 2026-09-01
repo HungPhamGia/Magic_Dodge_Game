@@ -276,7 +276,7 @@ def open_link(port: str, baud: int = WAND_BAUD):
     wand's own network. That adapter has no internet while it is joined.
     """
     if port == WAND_WIFI:
-        import wifi                 # root module, same as dollar
+        from wand import wifi                 # root module, same as dollar
 
         return wifi.Link()
     import serial

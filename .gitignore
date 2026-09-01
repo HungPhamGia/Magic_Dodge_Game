@@ -10,4 +10,6 @@ element/
 
 .claude/settings.local.json
 
+# working notes, not part of the project
 CLAUDE.md
+newidea.md

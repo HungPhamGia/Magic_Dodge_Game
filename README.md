@@ -37,7 +37,8 @@ python -m wand_test.test                         leave-one-out accuracy on those
 python -m wand_test.live_test                    draw with the wand, see it classified
 python -m wand_test.canvas                       raw wand trace, no recognition
 
-python demogame_v1/game.py                       earlier camera-only prototype, run from its dir
+python -m demogame_v1.game                       earlier camera-only prototype
+python -m demogame_v1.test_game                  its tests
 ```
 
 Esc quits. Z recentres the wand, which drifts because the firmware integrates gyro.

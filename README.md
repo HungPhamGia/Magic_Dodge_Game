@@ -53,6 +53,7 @@ magicdodge/            the game. game.py is pure logic and imports no pygame
   config.py            every tunable constant
   game.py              state machine, entities, collision, scoring
   inputs.py            KeyboardSource, CameraSource, WandSource behind one protocol
+  perception.py        MediaPipe pose landmarks, for CameraSource
   draw.py  main.py     rendering, window, loop, JSONL cast log
 wand/                  shared wand stack
   record.py            capture gesture templates

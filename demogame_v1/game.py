@@ -14,7 +14,7 @@ import time
 import cv2
 import mediapipe as mp
 
-from demogame_v1.perception import get_screen_size, read_points
+from magicdodge.perception import get_screen_size, read_points
 
 LANES = 3
 LIVES = 3

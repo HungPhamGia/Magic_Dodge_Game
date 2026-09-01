@@ -479,10 +479,11 @@ class CameraSource:
     def __init__(self, camera_id: int = CAM_ID, confidence: float = CAM_CONFIDENCE):
         # Deferred on purpose: keyboard-only play must not pay MediaPipe's
         # import, and must still run on a machine that has neither it nor a
-        # webcam. perception is a root module, so run from the repo root.
+        # webcam. perception sits in this package and pulls MediaPipe in, so it
+        # is imported here rather than at the top of the file.
         import cv2
 
-        from perception import read_points
+        from .perception import read_points
 
         self._cv2 = cv2
         self._read_points = read_points

@@ -276,7 +276,7 @@ def open_link(port: str, baud: int = WAND_BAUD):
     wand's own network. That adapter has no internet while it is joined.
     """
     if port == WAND_WIFI:
-        from wand import wifi       # sibling package, same as dollar
+        import wifi                 # root module, same as dollar
 
         return wifi.Link()
     import serial
@@ -297,14 +297,14 @@ class WandSource:
     def __init__(self, port: str = WAND_PORT, baud: int = WAND_BAUD,
                  reject: float = WAND_REJECT):
         # Deferred on purpose: keyboard-only play must not need pyserial, and a
-        # missing wand must not stop the game. wand is a sibling package, so
-        # the repo root has to be on sys.path: run from there with -m.
-        from wand import dollar
+        # missing wand must not stop the game. dollar is a root module, found
+        # relative to this package rather than the working directory.
+        import dollar
 
         root = Path(__file__).resolve().parent.parent
         templates = load_templates(root, dollar.normalize)
         if not templates:
-            raise RuntimeError(f"no {WAND_TEMPLATES} in {root}; run wand/record.py first")
+            raise RuntimeError(f"no {WAND_TEMPLATES} in {root}; run record.py first")
 
         self.reader = StrokeReader(templates, dollar.classify, reject=reject)
         self.link = open_link(port, baud)
@@ -479,11 +479,10 @@ class CameraSource:
     def __init__(self, camera_id: int = CAM_ID, confidence: float = CAM_CONFIDENCE):
         # Deferred on purpose: keyboard-only play must not pay MediaPipe's
         # import, and must still run on a machine that has neither it nor a
-        # webcam. perception sits in this package and pulls MediaPipe in, so it
-        # is imported here rather than at the top of the file.
+        # webcam. perception is a root module, so run from the repo root.
         import cv2
 
-        from .perception import read_points
+        from magicdodge.perception import read_points
 
         self._cv2 = cv2
         self._read_points = read_points

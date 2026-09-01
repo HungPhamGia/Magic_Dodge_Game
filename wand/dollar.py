@@ -1,4 +1,4 @@
-import math, json, glob
+import math, json, glob, os
 
 N = 64
 SIZE = 250.0
@@ -52,7 +52,9 @@ def score(a, b):
 def load_templates(pattern="strokes_*.json"):
     tpl = []
     for fn in glob.glob(pattern):
-        label = fn.split("_")[1]
+        label = os.path.basename(fn).split("_")[1]   # basename: an absolute
+                                                     # pattern would otherwise
+                                                     # split on gPBL_game first
         for s in json.load(open(fn)):
             if len(s) >= 15: tpl.append((label, normalize(s)))
     return tpl

@@ -20,9 +20,10 @@ wired wand; without them the game falls back to keyboard on its own.
 
 ## Run
 
-Everything runs **from the repo root with `-m`** — `magicdodge` imports the `wand` package as
-a sibling, and both find `strokes_*.json` at the root. Running a file by path instead
-(`python wand_test/test.py`) breaks those imports.
+Run `magicdodge` from the repo root with `-m` — it is a package and imports `wand` as a
+sibling. The `wand_test/` bench scripts work either way, by path or with `-m`, from any
+directory; they put the repo root on `sys.path` themselves and read `strokes_*.json` from
+the root rather than from the current directory.
 
 ```
 python -m magicdodge.main                        camera + wand + keyboard, fullscreen

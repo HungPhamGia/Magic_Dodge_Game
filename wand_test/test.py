@@ -1,8 +1,14 @@
-import json, glob
-from wand.dollar import load_templates, normalize, score, classify
+import json, sys
+from pathlib import Path
 
-files = sorted(glob.glob("strokes_*.json"))
-data = [(fn.split("_")[1], s) for fn in files for s in json.load(open(fn)) if len(s) >= 15]
+ROOT = Path(__file__).resolve().parent.parent   # so `python wand_test/test.py`
+if str(ROOT) not in sys.path:                   # works, not only `-m` from root
+    sys.path.insert(0, str(ROOT))
+
+from wand.dollar import normalize, classify
+
+files = sorted(ROOT.glob("strokes_*.json"))     # at the root, wherever cwd is
+data = [(fn.name.split("_")[1], s) for fn in files for s in json.load(open(fn)) if len(s) >= 15]
 
 ok = 0; scores = {"hit": [], "miss": []}
 for i, (truth, stroke) in enumerate(data):

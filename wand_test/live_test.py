@@ -1,4 +1,10 @@
-import serial, threading, glob, time, pygame
+import serial, threading, glob, time, sys, pygame
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent   # so `python wand_test/live_test.py`
+if str(ROOT) not in sys.path:                   # works, not only `-m` from root
+    sys.path.insert(0, str(ROOT))
+
 from wand.dollar import load_templates, classify, normalize, score
 from wand.wifi import Link
 
@@ -8,7 +14,7 @@ W, H    = 900, 700
 MIN_PTS = 15
 REJECT  = 60.0        # tune from test.py output
 
-tpl = load_templates()
+tpl = load_templates(str(ROOT / "strokes_*.json"))
 if not tpl:
     print("no strokes_*.json found. record templates first."); raise SystemExit(1)
 labels = sorted({lab for lab, _ in tpl})

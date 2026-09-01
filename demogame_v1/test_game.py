@@ -1,6 +1,6 @@
 """Self-check for the pure game logic. Run: python test_game.py"""
 
-from game import (
+from demogame_v1.game import (
     BOX_H,
     LANES,
     box_hits_nose,

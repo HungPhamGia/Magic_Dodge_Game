@@ -9,3 +9,5 @@ logs/
 element/
 
 .claude/settings.local.json
+
+CLAUDE.md

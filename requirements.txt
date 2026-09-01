@@ -1,0 +1,10 @@
+pygame-ce>=2.5
+
+# camera lane control (inputs.CameraSource). Optional: without these
+# --no-camera still plays, and an import failure falls back to it anyway.
+mediapipe==0.10.21
+opencv-contrib-python==4.11.0.86
+
+# wand casting (inputs.WandSource). Also optional: --no-wand still plays,
+# and a missing board or busy port falls back to J K L on its own.
+pyserial==3.5

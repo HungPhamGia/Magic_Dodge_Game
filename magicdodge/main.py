@@ -1,0 +1,189 @@
+"""Window, loop, log file. The only place the outside world is touched.
+
+Run from the repo root with:
+
+    python -m magicdodge.main                 fullscreen, camera + wand + keyboard
+    python -m magicdodge.main --camera 0      a different webcam
+    python -m magicdodge.main --wand COM7     a serial port instead of Wi-Fi
+    python -m magicdodge.main --no-camera --no-wand    keyboard only
+    python -m magicdodge.main --windowed      in a window, for debugging
+
+Esc quits, which is the way out of fullscreen. Z recentres the wand, which
+drifts because the firmware integrates gyro.
+"""
+
+import argparse
+import json
+import time
+from pathlib import Path
+
+import pygame
+
+from . import draw
+from .config import (
+    CAM_CONFIDENCE,
+    CAM_ID,
+    FIELD_W,
+    FPS,
+    WAND_PORT,
+    WAND_WIFI,
+    WINDOW_H,
+    WINDOW_W,
+)
+from .game import GAME_OVER, Game
+from .inputs import CameraSource, KeyboardSource, WandSource
+
+
+class CastLog:
+    """One JSONL line per cast, one per wave. See Game._log_cast for the schema.
+
+    confidence and duration_ms are placeholders while the keyboard is the only
+    source. They are written anyway so the schema does not change when the wand
+    starts filling them in for real.
+    """
+
+    def __init__(self, directory):
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        self.path = directory / f"session_{int(time.time())}.jsonl"
+        self._file = self.path.open("a", encoding="utf-8")
+
+    def write(self, record: dict) -> None:
+        self._file.write(json.dumps(record) + "\n")
+        self._file.flush()      # a crash mid playtest must not cost the session
+
+    def close(self) -> None:
+        self._file.close()
+
+
+class Sources:
+    """Poll several devices as one. Feedback and close fan out to all of them.
+
+    The camera moves you, the wand and the keyboard cast, so the game needs all
+    three at once. Order is camera, wand, keyboard: movement first, and within a
+    frame an explicit keypress wins.
+    """
+
+    def __init__(self, *sources):
+        self.sources = sources
+
+    def poll(self, dt):
+        return [event for source in self.sources for event in source.poll(dt)]
+
+    def send_feedback(self, state):
+        for source in self.sources:
+            source.send_feedback(state)
+
+    def close(self):
+        for source in self.sources:
+            source.close()
+
+
+def open_camera(camera_id: int, confidence: float):
+    """The camera is a nice-to-have. A missing webcam must not stop the game."""
+    try:
+        camera = CameraSource(camera_id, confidence)
+    except Exception as error:      # no webcam, no mediapipe, wrong index
+        print(f"Camera off ({error}); keyboard only.")
+        return None
+    print(f"Camera {camera_id} on. Step left and right to change lane.")
+    return camera
+
+
+def open_wand(port: str):
+    """Also a nice-to-have. No wand plugged in must not stop the game."""
+    try:
+        wand = WandSource(port)
+    except Exception as error:      # no board, no network, port already open
+        print(f"Wand off ({error}); cast with J K L.")
+        if port == WAND_WIFI:
+            # Nothing to enumerate for UDP: bind succeeds whether or not the
+            # wand is there, so the only useful thing to say is which network.
+            print("  join this PC to the wand's Wi-Fi: SSID MagicWand,"
+                  " password wand1234.")
+            return None
+        # By far the most common cause is the port already being held by the
+        # Arduino Serial Monitor or live_test.py. The recording scripts say so
+        # on failure and so should this.
+        try:
+            import serial.tools.list_ports
+
+            found = [f"{p.device} - {p.description}"
+                     for p in serial.tools.list_ports.comports()]
+            print("  ports:", ", ".join(found) if found else "none")
+            if any(line.startswith(port) for line in found):
+                print(f"  {port} exists, so something else has it open."
+                      " Close the Serial Monitor or live_test.py.")
+        except Exception:
+            pass
+        return None
+    print("Wand ready. Hold the button and draw a shape to cast.")
+    return wand
+
+
+def main(
+    camera_id: int | None = CAM_ID,
+    confidence: float = CAM_CONFIDENCE,
+    fullscreen: bool = True,
+    wand_port: str | None = WAND_PORT,
+) -> None:
+    camera = open_camera(camera_id, confidence) if camera_id is not None else None
+    wand = open_wand(wand_port) if wand_port is not None else None
+
+    pygame.init()
+    # SCALED renders at this fixed size and lets SDL fit it to the display, so
+    # every coordinate in config.py stays a plain number. Without a camera the
+    # game column is the whole surface and simply gets bars either side.
+    width = WINDOW_W if camera else FIELD_W
+    flags = (pygame.SCALED | pygame.FULLSCREEN) if fullscreen else 0
+    screen = pygame.display.set_mode((width, WINDOW_H), flags)
+    pygame.display.set_caption("MagicDodge")
+    clock = pygame.time.Clock()
+
+    keyboard = KeyboardSource()
+    log = CastLog(Path(__file__).parent / "logs")
+    devices = [device for device in (camera, wand, keyboard) if device]
+    game = Game(Sources(*devices), log)
+    print(f"Logging to {log.path}")
+
+    try:
+        while not keyboard.quit:
+            dt = clock.tick(FPS) / 1000.0
+            game.update(dt)
+            # The camera may have moved the player, so the keyboard's own idea
+            # of the lane has to follow or the next keypress snaps it back.
+            keyboard.lane = game.player.lane
+
+            if keyboard.restart:
+                if game.state == GAME_OVER:
+                    game.reset()
+                keyboard.reset(game.player.lane)
+
+            if keyboard.recenter:
+                if wand:
+                    wand.recenter()
+                keyboard.recenter = False
+
+            draw.frame(screen, game, keyboard, camera, wand)
+            pygame.display.flip()
+    finally:
+        log.close()
+        game.source.close()
+        pygame.quit()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="MagicDodge")
+    parser.add_argument("--camera", type=int, default=CAM_ID, help="webcam index")
+    parser.add_argument("--no-camera", action="store_true", help="keyboard only")
+    parser.add_argument("--confidence", type=float, default=CAM_CONFIDENCE)
+    parser.add_argument("--windowed", action="store_true", help="do not go fullscreen")
+    parser.add_argument("--wand", default=WAND_PORT, help="wand serial port")
+    parser.add_argument("--no-wand", action="store_true", help="cast with J K L")
+    args = parser.parse_args()
+    main(
+        None if args.no_camera else args.camera,
+        args.confidence,
+        fullscreen=not args.windowed,
+        wand_port=None if args.no_wand else args.wand,
+    )

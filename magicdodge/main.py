@@ -30,7 +30,10 @@ from .config import (
     WINDOW_H,
     WINDOW_W,
 )
+from . import cloud
+from .coach import Coach, load_profile, read_records, summarize, update_profile
 from .game import GAME_OVER, Game
+from .heart_rate import HeartRateMonitor
 from .inputs import CameraSource, KeyboardSource, WandSource
 
 
@@ -142,21 +145,40 @@ def main(
 
     keyboard = KeyboardSource()
     log = CastLog(Path(__file__).parent / "logs")
+    profile_path = Path(__file__).parent / "logs" / "profile.json"
     devices = [device for device in (camera, wand, keyboard) if device]
     game = Game(Sources(*devices), log)
+    coach = Coach()          # the post-run LLM coach; one per run, reset on restart
+    heart = HeartRateMonitor()   # wrist PPG stand-in; feeds effort into the coach
     print(f"Logging to {log.path}")
 
     try:
         while not keyboard.quit:
             dt = clock.tick(FPS) / 1000.0
             game.update(dt)
+            heart.update(dt, game)   # sample the heart rate against the game state
             # The camera may have moved the player, so the keyboard's own idea
             # of the lane has to follow or the next keypress snaps it back.
             keyboard.lane = game.player.lane
 
+            # On the first frame of game over, hand the finished run to the coach.
+            # _end_wave has already flushed the last wave_summary, so the log is
+            # complete; the request runs on its own thread and never blocks here.
+            if game.state == GAME_OVER and coach.status == "idle":
+                summary = summarize(read_records(log.path), game.score, game.wave)
+                summary["heart_rate"] = heart.summarize()          # effort input
+                summary["history"] = load_profile(profile_path)    # past runs, for progress
+                coach.request(summary)
+                # Persist the run and push it to the cloud (or a local file).
+                update_profile(profile_path, summary)
+                where = cloud.upload({"ts": int(time.time()), **summary}, log.path.parent)
+                print(f"Session uploaded to {where}")
+
             if keyboard.restart:
                 if game.state == GAME_OVER:
                     game.reset()
+                    coach = Coach()             # fresh coach for the next run
+                    heart = HeartRateMonitor()  # fresh heart rate trace
                 keyboard.reset(game.player.lane)
 
             if keyboard.recenter:
@@ -164,7 +186,7 @@ def main(
                     wand.recenter()
                 keyboard.recenter = False
 
-            draw.frame(screen, game, keyboard, camera, wand)
+            draw.frame(screen, game, keyboard, camera, wand, coach, heart)
             pygame.display.flip()
     finally:
         log.close()

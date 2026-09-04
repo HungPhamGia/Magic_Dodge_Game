@@ -20,23 +20,21 @@ if [ ! -x ".venv/bin/python" ]; then
     ./.venv/bin/pip install --quiet "pygame-ce>=2.5" || { echo "Loi cai pygame"; read -r; exit 1; }
 fi
 
-# Doi nhip tim that qua Bluetooth: dat ten dong ho vao HR_NAME de bat.
-#   Vi du trong .env hoac o day:  export HR_NAME='Band'
-# Khong dat thi game dung nhip tim mo phong (van day len Firebase binh thuong).
-if [ -n "$HR_NAME" ]; then
-    ./.venv/bin/python -c "import bleak" 2>/dev/null || ./.venv/bin/pip install --quiet bleak
-fi
+# Game YEU CAU dong ho nhip tim that (thiet ke goc): man bat dau doi den khi dong
+# ho gui du lieu moi cho vao choi. Can bleak de quet/ket noi dong ho.
+./.venv/bin/python -c "import bleak" 2>/dev/null || ./.venv/bin/pip install --quiet bleak
+# Dat HR_NAME de thu hep quet theo ten dong ho, vi du:  export HR_NAME='Band'
+# (Chi khi CAN test khong co dong ho moi them --sim-hr / --no-hr.)
 
 echo "Dang mo game... (nhan Esc de thoat)"
 # Camera BAT (nghieng nguoi de doi lan). Neu khong co webcam/quyen, game tu chuyen
 # ve ban phim. Dat CAM=0 truoc khi chay de tat camera neu can.
 CAM_FLAG=""; [ "$CAM" = "0" ] && CAM_FLAG="--no-camera"
+# Doi dong ho nhip tim that (thiet ke goc). HR_NAME chi thu hep quet.
 if [ -n "$HR_NAME" ]; then
-    # Co dong ho that: cho ket noi roi moi vao.
     ./.venv/bin/python -m magicdodge.main $CAM_FLAG --no-wand --hr-name "$HR_NAME"
 else
-    # Khong co dong ho: dung nhip tim GIA, bo qua man "waiting for heart rate watch".
-    ./.venv/bin/python -m magicdodge.main $CAM_FLAG --no-wand --sim-hr
+    ./.venv/bin/python -m magicdodge.main $CAM_FLAG --no-wand
 fi
 
 echo ""

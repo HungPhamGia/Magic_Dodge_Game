@@ -332,11 +332,46 @@ def _sky():
     return _sky_surf
 
 
+def _column(field, x, yb, h, w, a, s, inner) -> None:
+    """A detailed stone column with a lit torch, in the dungeon's grey masonry:
+    three shading bands for roundness, brick courses, a capital and a base, and
+    a bracketed flame on the side facing the road. a fades it with distance."""
+    x, w = int(x), max(3, int(w))
+    top = int(yb - h)
+    light, mid, dark = _fade((162, 156, 156), a), _fade((120, 114, 118), a), _fade((78, 74, 82), a)
+    # shaft, rounded by three vertical shading bands
+    pygame.draw.rect(field, mid, (x - w // 2, top, w, int(h)))
+    pygame.draw.rect(field, light, (x - w // 2, top, max(1, w // 3), int(h)))
+    pygame.draw.rect(field, dark, (x + w // 6, top, max(1, w // 3), int(h)))
+    # brick courses
+    seg = max(6, int(0.09 * h))
+    for by in range(top + seg, int(yb), seg):
+        pygame.draw.line(field, dark, (x - w // 2, by), (x + w // 2, by), 1)
+    # capital and base, a touch wider than the shaft
+    cw, ch = int(w * 1.5), max(3, int(0.055 * h))
+    pygame.draw.rect(field, light, (x - cw // 2, top - ch, cw, ch))
+    pygame.draw.rect(field, mid, (x - cw // 2, int(yb) - ch, cw, ch))
+    pygame.draw.rect(field, dark, (x - cw // 2, top - ch, cw, ch), 1)
+    # a flaming torch on the inner side, only once the column is solid enough
+    if a > 0.4:
+        fx = x + inner * int(w * 0.55)
+        fy = top + int(0.17 * h)
+        flick = 0.8 + 0.35 * math.sin(pygame.time.get_ticks() / 90.0 + x * 0.3)
+        fr = max(3, int(9 * s * flick))
+        pygame.draw.line(field, (64, 46, 30), (x, fy), (fx, fy), max(2, int(3 * s)))
+        _blit_glow(field, (255, 168, 60), fx, fy - fr, int(fr * 3.4))
+        pygame.draw.ellipse(field, (238, 120, 34), (fx - fr, fy - fr * 3, fr * 2, fr * 3))
+        pygame.draw.ellipse(field, (255, 198, 74),
+                            (fx - int(fr * 0.6), fy - int(fr * 2.4), int(fr * 1.2), int(fr * 2)))
+        pygame.draw.ellipse(field, (255, 248, 200),
+                            (fx - max(1, int(fr * 0.3)), fy - int(fr * 1.6),
+                             max(2, int(fr * 0.6)), max(2, int(fr * 1.1))))
+
+
 def _persp_columns(field, game) -> None:
-    """Stone columns with torches, planted at fixed points along the road and
-    carried by the SAME scroll as the floor, so they travel with the road toward
-    you instead of cycling in place. Each one enters faded at the far end and
-    fades out as it reaches you, so there is no pop when it leaves the window."""
+    """Columns planted at fixed points along the road and carried by the SAME
+    scroll as the floor, so they travel with the road toward you. Each enters
+    faded at the far end and fades out as it nears, so nothing pops."""
     R = road_px(game)                      # distance walked, same units as the floor
     view = float(FIELD_BOTTOM - FIELD_TOP)  # one screenful of travel ahead
     spacing = view / 5.0                    # gap between column pairs
@@ -351,15 +386,10 @@ def _persp_columns(field, game) -> None:
         if a <= 0.03:
             continue
         s = _persp(t)
-        h, w = int(340 * s), max(2, int(34 * s))
-        stone = _fade((74, 72, 94), a)
-        for off in (-1.85, 1.85):
+        h, w = 360 * s, max(3, int(42 * s))
+        for off, inner in ((-1.9, 1), (1.9, -1)):
             x, yb = _edge(off, t)
-            pygame.draw.rect(field, stone, (int(x - w / 2), int(yb - h), w, h))
-            _blit_glow(field, (255, 178, 74), int(x), int(yb - h), max(6, int(30 * s * a)))
-            if a > 0.6:
-                pygame.draw.circle(field, (255, 214, 140), (int(x), int(yb - h)),
-                                   max(2, int(6 * s)))
+            _column(field, x, yb, h, w, a, s, inner)
 
 
 def _persp_backdrop(field, game) -> bool:

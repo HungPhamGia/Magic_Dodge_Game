@@ -102,6 +102,11 @@ _raw: dict = {}     # name -> the file as loaded
 _scaled: dict = {}  # (name, height) -> surface at that height, or None
 _fill: dict = {}    # name -> how much of its canvas height is real content
 
+_px = None          # the player's animated x, eased for a smooth lane-change glide
+_plast_lane = None  # last integer lane, to catch the moment a change happens
+_pdir = 0           # direction of the last change, for the motion trail
+_pswitch_ms = -10000  # tick of the last lane change, for the arrival spark
+
 
 def frame(screen, game, source, camera=None, wand=None, coach=None, hr=None) -> None:
     global _field
@@ -139,6 +144,13 @@ def frame(screen, game, source, camera=None, wand=None, coach=None, hr=None) -> 
 
 def screen_y(grid_y: float) -> float:
     return FIELD_TOP + grid_y * (FIELD_BOTTOM - FIELD_TOP)
+
+
+def _depth(grid_y: float) -> float:
+    """A 3D size cue on top of the art: a threat far up the corridor reads
+    smaller, one near you larger, so it feels like it rushes toward you. Only
+    the size changes, never the lane x, so it stays lined up with the art."""
+    return 0.60 + 0.55 * max(0.0, min(1.0, grid_y))
 
 
 def road_px(game) -> float:
@@ -334,64 +346,102 @@ def _walls(field, threats) -> None:
 
 def _monsters(field, threats) -> None:
     pulse = 0.55 + 0.45 * math.sin(pygame.time.get_ticks() / 260.0)
-    for threat in threats:
+    for threat in sorted(threats, key=lambda t: t.y):      # far first, near on top
         if threat.kind != "monster":
             continue
         cx, cy = lane_center(threat.lane), screen_y(threat.y)
-        _emblem(field, threat.shape, COLORS[threat.shape], cx, cy, MONSTER_SIZE)
+        size = int(MONSTER_SIZE * _depth(threat.y))         # grows as it nears
+        _emblem(field, threat.shape, COLORS[threat.shape], cx, cy, size)
         if threat.empowered:
             # ponytail: the glow pulses by fading the colour toward the
             # background instead of blitting a per-shape alpha surface. Same
             # read at a glance, one line instead of a surface per monster.
             glow = _fade(EMPOWERED, 0.6 + 0.4 * pulse)
-            shape_at(field, threat.shape, glow, cx, cy, MONSTER_SIZE + 10, width=3)
+            shape_at(field, threat.shape, glow, cx, cy, size + 10, width=3)
 
 
 def _bolts(field, bolts) -> None:
     for bolt in bolts:
         color = COLORS[bolt.shape]
         cx, cy = lane_center(bolt.lane), screen_y(bolt.y)
+        d = _depth(bolt.y)                                   # smaller far, bigger near
         tail = screen_y(min(1.0, bolt.y + 0.06))
         # The streak stays whether or not there is art: a bolt crosses the
         # field in BOLT_TRAVEL_S, about 15 frames, and the trail is what makes
         # it readable at that speed.
-        pygame.draw.line(field, _fade(color, 0.55), (cx, cy), (cx, tail), 5)
-        art = _sprite(f"bolt_{bolt.shape}", BOLT_ART_H)
+        pygame.draw.line(field, _fade(color, 0.55), (cx, cy), (cx, tail), max(3, int(5 * d)))
+        art = _sprite(f"bolt_{bolt.shape}", max(12, int(BOLT_ART_H * d)))
         if art is None:
-            pygame.draw.circle(field, color, (int(cx), int(cy)), BOLT_R)
+            pygame.draw.circle(field, color, (int(cx), int(cy)), max(4, int(BOLT_R * d)))
         else:
             field.blit(art, art.get_rect(center=(int(cx), int(cy))))
+
+
+def _update_player_x(game) -> None:
+    """Ease the drawn player x toward its lane and note when it changes, so he
+    glides between lanes instead of snapping."""
+    global _px, _plast_lane, _pdir, _pswitch_ms
+    target = lane_center(game.player.lane)
+    if _px is None:
+        _px, _plast_lane = float(target), game.player.lane
+    if game.player.lane != _plast_lane:
+        _pdir = 1 if game.player.lane > _plast_lane else -1
+        _pswitch_ms = pygame.time.get_ticks()
+        _plast_lane = game.player.lane
+    _px += (target - _px) * 0.20
+
+
+def _lane_spark(field, x, y, p) -> None:
+    """A ring of sparks that flies out when a lane is taken (p is 0..1)."""
+    for i in range(8):
+        a = math.pi * 2 * i / 8
+        r = 24 + 70 * p
+        dot = pygame.Surface((8, 8), pygame.SRCALPHA)
+        pygame.draw.circle(dot, (255, 220, 120, int(210 * (1 - p))), (4, 4), 3)
+        field.blit(dot, (int(x + r * math.cos(a)) - 4, int(y + r * 0.45 * math.sin(a)) - 4))
+
+
+def _player_triangle(field, cx, alpha) -> None:
+    """The fallback player, as a translucent triangle (alpha for the trail)."""
+    half = PLAYER_SIZE // 2
+    surf = pygame.Surface((PLAYER_SIZE, PLAYER_SIZE), pygame.SRCALPHA)
+    pygame.draw.polygon(surf, (*PLAYER, alpha),
+                        [(half, 0), (PLAYER_SIZE, PLAYER_SIZE), (0, PLAYER_SIZE)])
+    field.blit(surf, (int(cx) - half, PLAYER_ROW_Y - PLAYER_SIZE + half))
 
 
 def _player(field, game) -> None:
     # 10 Hz blink while invulnerable.
     if game.iframe_ms > 0 and int(game.t_ms / 50) % 2:
         return
-    cx = lane_center(game.player.lane)
+    _update_player_x(game)
+    x = _px if _px is not None else lane_center(game.player.lane)
+    target = lane_center(game.player.lane)
     # The stride is driven by ground covered, not by the clock, so the feet
     # keep up on a fast wave and slow down on a slow one without a second knob.
     name = f"player{int(road_px(game) / WALK_STEP_PX) % len(WALK)}"
     if _sprite(name, PLAYER_ART_H) is None:
         name = "player0"          # a part filled element/ must not flicker
     sprite = _sprite(name, PLAYER_ART_H)
-    if sprite is None:
-        half = PLAYER_SIZE // 2
-        pygame.draw.polygon(
-            field,
-            PLAYER,
-            [
-                (cx, PLAYER_ROW_Y - half),
-                (cx + half, PLAYER_ROW_Y + half),
-                (cx - half, PLAYER_ROW_Y + half),
-            ],
-        )
-        return
 
-    # Standing on the row rather than centred on it. Centred is where the
-    # triangle was, but at 150px he then covered the controls hint. Collision
-    # is grid space, so where he sits is only ever cosmetic.
-    rect = sprite.get_rect(midbottom=(cx, PLAYER_ROW_Y))
-    field.blit(sprite, rect)
+    if abs(target - x) > 4:                          # motion trail during a glide
+        for i, a in ((1, 90), (2, 46)):
+            gx = int(x - _pdir * i * 20)
+            if sprite is None:
+                _player_triangle(field, gx, a)
+            else:
+                ghost = sprite.copy()
+                ghost.set_alpha(a)
+                field.blit(ghost, ghost.get_rect(midbottom=(gx, PLAYER_ROW_Y)))
+
+    if sprite is None:
+        _player_triangle(field, int(x), 255)
+    else:
+        field.blit(sprite, sprite.get_rect(midbottom=(int(x), PLAYER_ROW_Y)))
+
+    age = pygame.time.get_ticks() - _pswitch_ms      # arrival spark
+    if age < 320:
+        _lane_spark(field, target, PLAYER_ROW_Y, age / 320.0)
 
 
 def _fade(color, amount: float):

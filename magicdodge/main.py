@@ -8,6 +8,7 @@ Run from the repo root with:
     python -m magicdodge.main --no-camera --no-wand    keyboard only
     python -m magicdodge.main --hr-name Band  narrow the watch scan by name
     python -m magicdodge.main --no-hr         play without a heart rate watch
+    python -m magicdodge.main --sim-hr        fake heart rate, skip the watch wait
     python -m magicdodge.main --windowed      in a window, for debugging
 
 The camera, the wand and the heart rate watch are all on by default and all
@@ -241,6 +242,9 @@ if __name__ == "__main__":
                         help="narrow the watch scan by name substring, e.g. Band")
     parser.add_argument("--no-hr", action="store_true",
                         help="play without a heart rate watch (skips the wait)")
+    parser.add_argument("--sim-hr", action="store_true",
+                        help="skip the watch wait and use a simulated (fake) heart "
+                             "rate, for testing without a device")
     args = parser.parse_args()
     main(
         None if args.no_camera else args.camera,
@@ -249,5 +253,5 @@ if __name__ == "__main__":
         wand_port=None if args.no_wand else args.wand,
         hr_device=args.hr_device,
         hr_name=args.hr_name,
-        use_hr=not args.no_hr,
+        use_hr=not (args.no_hr or args.sim_hr),
     )

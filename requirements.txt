@@ -15,7 +15,10 @@ pyserial==3.5
 # falls back to a built-in offline coach so a run always ends with feedback.
 #
 # Heart rate (heart_rate.py) needs nothing extra: it simulates a wrist monitor
-# when no device is present, and feeds effort into the coach.
+# when no device is present, and feeds effort into the coach. To read a real BLE
+# watch instead, run with --hr-name (or --hr-device) and install bleak, which the
+# bridge (hr_device.py) uses to drive heart_rate_monitor.py:  pip install bleak
+# A missing watch or missing bleak just falls back to the simulated trace.
 #
 # Cloud upload (cloud.py) sends each session to a store chosen by env var.
 # Firebase (FIREBASE_DB_URL) uses stdlib HTTP; MongoDB (MONGODB_URI) needs pymongo,

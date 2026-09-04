@@ -20,8 +20,15 @@ if [ ! -x ".venv/bin/python" ]; then
     ./.venv/bin/pip install --quiet "pygame-ce>=2.5" || { echo "Loi cai pygame"; read -r; exit 1; }
 fi
 
+# Doi nhip tim that qua Bluetooth: dat ten dong ho vao HR_NAME de bat.
+#   Vi du trong .env hoac o day:  export HR_NAME='Band'
+# Khong dat thi game dung nhip tim mo phong (van day len Firebase binh thuong).
+if [ -n "$HR_NAME" ]; then
+    ./.venv/bin/python -c "import bleak" 2>/dev/null || ./.venv/bin/pip install --quiet bleak
+fi
+
 echo "Dang mo game toan man hinh... (nhan Esc de thoat)"
-./.venv/bin/python -m magicdodge.main --no-camera --no-wand
+./.venv/bin/python -m magicdodge.main --no-camera --no-wand ${HR_NAME:+--hr-name "$HR_NAME"}
 
 echo ""
 echo "Game da dong. Nhan Enter de tat cua so nay."

@@ -6,6 +6,7 @@ Run from the repo root with:
     python -m magicdodge.main --camera 0      a different webcam
     python -m magicdodge.main --wand COM7     a serial port instead of Wi-Fi
     python -m magicdodge.main --no-camera --no-wand    keyboard only
+    python -m magicdodge.main --hr-name Band  connect a real BLE heart rate watch
     python -m magicdodge.main --windowed      in a window, for debugging
 
 Esc quits, which is the way out of fullscreen. Z recentres the wand, which
@@ -34,6 +35,7 @@ from . import cloud
 from .coach import Coach, load_profile, read_records, summarize, update_profile
 from .game import GAME_OVER, Game
 from .heart_rate import HeartRateMonitor
+from .hr_device import HeartDeviceBridge
 from .inputs import CameraSource, KeyboardSource, WandSource
 
 
@@ -129,6 +131,8 @@ def main(
     confidence: float = CAM_CONFIDENCE,
     fullscreen: bool = True,
     wand_port: str | None = WAND_PORT,
+    hr_device: str | None = None,
+    hr_name: str | None = None,
 ) -> None:
     camera = open_camera(camera_id, confidence) if camera_id is not None else None
     wand = open_wand(wand_port) if wand_port is not None else None
@@ -151,6 +155,13 @@ def main(
     coach = Coach()          # the post-run LLM coach; one per run, reset on restart
     heart = HeartRateMonitor()   # wrist PPG stand-in; feeds effort into the coach
     print(f"Logging to {log.path}")
+
+    # A real BLE watch, if asked for. The bridge runs on its own thread and
+    # calls push() on whichever heart monitor is current, so restart still
+    # feeds the new one. Without a watch the simulation above stays in charge.
+    if hr_device or hr_name:
+        HeartDeviceBridge(lambda bpm: heart.push(bpm),
+                          target=hr_device, name=hr_name).start()
 
     try:
         while not keyboard.quit:
@@ -202,10 +213,16 @@ if __name__ == "__main__":
     parser.add_argument("--windowed", action="store_true", help="do not go fullscreen")
     parser.add_argument("--wand", default=WAND_PORT, help="wand serial port")
     parser.add_argument("--no-wand", action="store_true", help="cast with J K L")
+    parser.add_argument("--hr-device", default=None,
+                        help="BLE heart rate watch MAC/UUID to connect to")
+    parser.add_argument("--hr-name", default=None,
+                        help="connect a heart rate watch by name substring, e.g. Band")
     args = parser.parse_args()
     main(
         None if args.no_camera else args.camera,
         args.confidence,
         fullscreen=not args.windowed,
         wand_port=None if args.no_wand else args.wand,
+        hr_device=args.hr_device,
+        hr_name=args.hr_name,
     )

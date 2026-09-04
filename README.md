@@ -59,6 +59,7 @@ python -m magicdodge.main --windowed              windowed, for debugging
 python -m magicdodge.main --camera 0              a different webcam (default 1)
 python -m magicdodge.main --wand COM5             a serial port instead of Wi-Fi
 python -m magicdodge.main --confidence 0.4        looser pose tracking, for bad light
+python -m magicdodge.main --hr-name Band          connect a real BLE heart rate watch
 ```
 
 ## Difficulty
@@ -95,6 +96,98 @@ match scoring worse than 60 is treated as a misfire; good templates score around
 
 Unlike `magicdodge`, the `wand_test/` scripts run from anywhere, by path or with `-m`.
 
+## The AI coach
+
+When a run ends, an optional coach reads the session and writes personal feedback on the game
+over screen. It folds the cast log into a compact summary (score, waves, accuracy, longest
+combo, per shape reliability, outcome counts), attaches the heart rate summary as an effort
+signal and a short history of past runs, and sends that to a language model through
+[OpenRouter](https://openrouter.ai). The reply is constrained to a fixed JSON schema, so the
+game draws it without parsing guesswork. The raw object the coach returns looks like this:
+
+```json
+{
+  "analysis": "private reasoning, read by the game but never shown on screen",
+  "headline": "You reached wave 4 with 1750 points.",
+  "did_well": [
+    "New personal best, up from 1520 points.",
+    "Sharp casting, 79% of your spells landed a kill.",
+    "You built a 7x combo."
+  ],
+  "improve": [
+    "You empowered monsters twice, so recall the losing shape.",
+    "A few casts were blocked, which is the monster's own shape.",
+    "You took three hits, so lean out of a lane earlier."
+  ],
+  "tip": "Draw the shape that beats the monster.",
+  "effort": "Your heart rate rose about 89 beats above rest, so you were working hard.",
+  "encouragement": "Nice run. Line up the shapes and that score will climb!"
+}
+```
+
+`analysis` is a private reasoning field the model fills first and the game hides; the six fields
+below it are shown. The coach runs on a background thread, so the game never pauses. It tries
+the chosen model, then a set of free models, then a built in offline coach that applies simple
+rules to the same summary — so a run always ends with feedback, with or without a key or
+internet.
+
+Enable the model by setting an API key; without it, the offline coach runs.
+
+```
+export OPENROUTER_API_KEY=sk-or-...                  enables the model
+export OPENROUTER_MODEL=anthropic/claude-sonnet-5    optional; this is the default
+```
+
+The default is Claude Sonnet 5. `anthropic/claude-haiku-4.5` is cheaper and
+`anthropic/claude-opus-4.8` is the strongest. The key is read from the environment and never
+stored in the repo: put it in a gitignored `.env` and the launcher sources it. The coach is
+instructed to speak only about play and effort, never health or medical advice — the heart rate
+is an effort signal, not a clinical reading.
+
+## Heart rate
+
+A wrist heart rate feeds the coach an effort signal and shows live on the HUD. By default
+`magicdodge/heart_rate.py` simulates a plausible trace driven by how intense the game is, so the
+whole pipeline runs and demonstrates without any hardware.
+
+To read a real Bluetooth watch (standard BLE Heart Rate profile, `0x180D`), install `bleak` and
+name your device:
+
+```
+pip install bleak
+python -m magicdodge.main --hr-name Band     match a watch by a substring of its name
+python -m magicdodge.main --hr-device <MAC>  or connect straight to an address or UUID
+```
+
+`magicdodge/hr_device.py` runs the BLE reader (`heart_rate_monitor.py`) on a background thread
+and pushes each reading into the game, so the real trace replaces the simulation and flows into
+the coach and the upload. A missing watch, a missing `bleak`, or a dropped connection falls back
+to the simulation without stopping the game. The launcher enables it from `HR_NAME`:
+
+```
+export HR_NAME=Band
+./chay_game.command
+```
+
+## Cloud storage
+
+Each finished session (the game summary plus the heart rate summary) is uploaded so results can
+be gathered across players. The backend is chosen from the environment, so nothing secret is
+hardcoded:
+
+| Variable | Backend |
+| --- | --- |
+| `MONGODB_URI` | MongoDB (needs `pip install pymongo`) |
+| `FIREBASE_DB_URL` (+ optional `FIREBASE_SECRET`) | Firebase Realtime Database, over stdlib HTTP |
+| `SESSION_ENDPOINT` | any HTTP endpoint that accepts a JSON POST |
+| none set | a local `magicdodge/logs/uploads.jsonl`, so the pipeline still runs offline |
+
+The upload runs after the game and never interrupts play. Read a Firebase store back with:
+
+```
+curl -s "$FIREBASE_DB_URL/magicdodge_sessions.json"
+```
+
 ## Layout
 
 ```
@@ -105,6 +198,10 @@ magicdodge/            the game
   perception.py        MediaPipe pose landmarks, for CameraSource
   draw.py              all rendering
   main.py              window, loop, JSONL cast log
+  coach.py             post-run LLM coach (OpenRouter) with an offline fallback
+  heart_rate.py        wrist heart rate, simulated or fed by a real device
+  hr_device.py         bridges a BLE watch into the game
+  cloud.py             uploads each session to Firebase, MongoDB, or a local file
 wand/
   record.py            capture gesture templates
   dollar.py            $1 recognizer
@@ -113,6 +210,7 @@ wand_test/             bench tools for the recognizer, not part of the game
 demogame_v1/           earlier camera-only prototype, superseded
 drawing_wand_mpu6050/  the firmware
 strokes_*.json         recorded gestures. The wand will not start without them
+heart_rate_monitor.py  standalone BLE heart rate reader (Bleak), driven by hr_device.py
 ```
 
 `game.py` deliberately imports no pygame, which is what lets `test_magicdodge.py` cover the

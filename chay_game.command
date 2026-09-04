@@ -28,12 +28,15 @@ if [ -n "$HR_NAME" ]; then
 fi
 
 echo "Dang mo game... (nhan Esc de thoat)"
+# Camera BAT (nghieng nguoi de doi lan). Neu khong co webcam/quyen, game tu chuyen
+# ve ban phim. Dat CAM=0 truoc khi chay de tat camera neu can.
+CAM_FLAG=""; [ "$CAM" = "0" ] && CAM_FLAG="--no-camera"
 if [ -n "$HR_NAME" ]; then
     # Co dong ho that: cho ket noi roi moi vao.
-    ./.venv/bin/python -m magicdodge.main --no-camera --no-wand --hr-name "$HR_NAME"
+    ./.venv/bin/python -m magicdodge.main $CAM_FLAG --no-wand --hr-name "$HR_NAME"
 else
     # Khong co dong ho: dung nhip tim GIA, bo qua man "waiting for heart rate watch".
-    ./.venv/bin/python -m magicdodge.main --no-camera --no-wand --sim-hr
+    ./.venv/bin/python -m magicdodge.main $CAM_FLAG --no-wand --sim-hr
 fi
 
 echo ""

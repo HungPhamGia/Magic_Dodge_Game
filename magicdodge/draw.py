@@ -340,10 +340,10 @@ def _column(field, x, yb, h, w, a, s, inner) -> None:
     top = int(yb - h)
     light, mid, dark = _fade((162, 156, 156), a), _fade((120, 114, 118), a), _fade((78, 74, 82), a)
     # contact shadow, so the column reads as planted on the floor, not floating
-    sw2, sh2 = int(w * 2.2), max(4, int(0.05 * h))
+    sw2, sh2 = int(w * 2.8), max(5, int(0.06 * h))
     shadow = pygame.Surface((sw2, sh2), pygame.SRCALPHA)
-    pygame.draw.ellipse(shadow, (0, 0, 0, int(130 * a)), shadow.get_rect())
-    field.blit(shadow, (x - sw2 // 2, int(yb) - sh2 // 2))
+    pygame.draw.ellipse(shadow, (0, 0, 0, int(170 * a)), shadow.get_rect())
+    field.blit(shadow, (x - sw2 // 2, int(yb) - sh2 // 2 + max(2, int(4 * s))))
     # shaft, rounded by three vertical shading bands
     pygame.draw.rect(field, mid, (x - w // 2, top, w, int(h)))
     pygame.draw.rect(field, light, (x - w // 2, top, max(1, w // 3), int(h)))
@@ -352,11 +352,18 @@ def _column(field, x, yb, h, w, a, s, inner) -> None:
     seg = max(6, int(0.09 * h))
     for by in range(top + seg, int(yb), seg):
         pygame.draw.line(field, dark, (x - w // 2, by), (x + w // 2, by), 1)
-    # capital and base, a touch wider than the shaft
+    # capital at the top
     cw, ch = int(w * 1.5), max(3, int(0.055 * h))
     pygame.draw.rect(field, light, (x - cw // 2, top - ch, cw, ch))
-    pygame.draw.rect(field, mid, (x - cw // 2, int(yb) - ch, cw, ch))
     pygame.draw.rect(field, dark, (x - cw // 2, top - ch, cw, ch), 1)
+    # base plinth: a wider stepped block that sits on, and slightly sinks into,
+    # the floor so the column is clearly planted, not hovering
+    sink = max(3, int(6 * s))
+    pw, ph = int(w * 1.8), max(4, int(0.08 * h))
+    py = int(yb) - ph + sink
+    pygame.draw.rect(field, mid, (x - pw // 2, py, pw, ph + sink))
+    pygame.draw.rect(field, light, (x - pw // 2, py, pw, max(1, int(ph * 0.35))))
+    pygame.draw.rect(field, dark, (x - pw // 2, py, pw, ph + sink), 1)
     # a flaming torch on the inner side, only once the column is solid enough
     if a > 0.4:
         fx = x + inner * int(w * 0.55)
@@ -392,7 +399,7 @@ def _persp_columns(field, game) -> None:
             continue
         s = _persp(t)
         h, w = 360 * s, max(3, int(42 * s))
-        for off, inner in ((-1.62, 1), (1.62, -1)):    # on the floor's edge, not beyond it
+        for off, inner in ((-1.55, 1), (1.55, -1)):    # on the floor's edge, not beyond it
             x, yb = _edge(off, t)
             _column(field, x, yb, h, w, a, s, inner)
 

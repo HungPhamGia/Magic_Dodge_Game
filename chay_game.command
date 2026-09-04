@@ -27,8 +27,14 @@ if [ -n "$HR_NAME" ]; then
     ./.venv/bin/python -c "import bleak" 2>/dev/null || ./.venv/bin/pip install --quiet bleak
 fi
 
-echo "Dang mo game toan man hinh... (nhan Esc de thoat)"
-./.venv/bin/python -m magicdodge.main --no-camera --no-wand ${HR_NAME:+--hr-name "$HR_NAME"}
+echo "Dang mo game... (nhan Esc de thoat)"
+if [ -n "$HR_NAME" ]; then
+    # Co dong ho that: cho ket noi roi moi vao.
+    ./.venv/bin/python -m magicdodge.main --no-camera --no-wand --hr-name "$HR_NAME"
+else
+    # Khong co dong ho: dung nhip tim GIA, bo qua man "waiting for heart rate watch".
+    ./.venv/bin/python -m magicdodge.main --no-camera --no-wand --sim-hr
+fi
 
 echo ""
 echo "Game da dong. Nhan Enter de tat cua so nay."

@@ -338,7 +338,7 @@ def _column(field, x, yb, h, w, a, s, inner) -> None:
     on the road-facing side. No horizontal foot -- it just sinks into the wall."""
     x, w = int(x), max(3, int(w))
     top = int(yb - h)
-    sink = max(6, int(14 * s))                    # plunge below the edge into the wall
+    sink = max(10, int(28 * s))                   # plunge deep into the edge wall
     bottom = int(yb) + sink
     hh = bottom - top
     light, mid, dark = _fade((162, 156, 156), a), _fade((120, 114, 118), a), _fade((78, 74, 82), a)
@@ -379,14 +379,14 @@ def _edge_wall(field) -> None:
         for i in range(14, 41):                 # t 0.35..1.0, on the solid floor
             t = i / 40.0
             x, y = _edge(side, t)
-            ch = max(2, 16 * _persp(t))          # low wall height, grows near
+            ch = max(3, 26 * _persp(t))          # wall height, grows near
             top.append((x, y - ch))
             bot.append((x, y))
         if len(top) < 2:
             continue
-        pygame.draw.polygon(field, (86, 82, 96), top + bot[::-1])      # wall face
-        pygame.draw.lines(field, (142, 136, 150), False, top, 2)       # lit cap
-        pygame.draw.lines(field, (36, 34, 46), False, bot, 1)          # base line
+        pygame.draw.polygon(field, (120, 114, 118), top + bot[::-1])   # same stone as columns
+        pygame.draw.lines(field, (162, 156, 156), False, top, 2)       # lit cap, column light
+        pygame.draw.lines(field, (78, 74, 82), False, bot, 1)          # base, column dark
 
 
 def _persp_columns(field, game) -> None:

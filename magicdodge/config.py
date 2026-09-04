@@ -99,24 +99,31 @@ WAND_CALIBRATE_S = 6.0            # wait for "# ready" after the reboot. Measure
 
 WAVES = [
     # fall  gap  rows  monster_lanes  shapes            (you draw)
-    {"fall": 8.0, "gap": 4.0, "rows": 5, "monster_lanes": 2,
+    {"fall": 8.0, "gap": 3.5, "rows": 6, "monster_lanes": 2,
      "shapes": ["square"]},                             # triangle
-    {"fall": 7.0, "gap": 3.5, "rows": 5, "monster_lanes": 2,
+    {"fall": 6.5, "gap": 2.8, "rows": 9, "monster_lanes": 2,
      "shapes": ["square", "triangle"]},                 # triangle, circle
-    {"fall": 6.0, "gap": 3.0, "rows": 5, "monster_lanes": 1,
+    {"fall": 5.5, "gap": 2.2, "rows": 12, "monster_lanes": 1,
      "shapes": ["square", "triangle"]},                 # triangle, circle
-    {"fall": 5.0, "gap": 2.5, "rows": 6, "monster_lanes": 1,
+    {"fall": 4.5, "gap": 1.7, "rows": 16, "monster_lanes": 1,
      "shapes": ["square", "triangle", "circle"]},       # all three
-    {"fall": 4.0, "gap": 2.0, "rows": 6, "monster_lanes": 1,
+    {"fall": 3.5, "gap": 1.3, "rows": 22, "monster_lanes": 1,
      "shapes": ["square", "triangle", "circle"]},       # all three
-    {"fall": 3.0, "gap": 1.5, "rows": 7, "monster_lanes": 1,
+    {"fall": 2.8, "gap": 0.95, "rows": 30, "monster_lanes": 1,
      "shapes": ["square", "triangle", "circle"]},       # all three
 ]
-WAVE_ENDLESS = 0.9                # past the table, each wave scales fall and
+WAVE_ENDLESS = 0.85               # past the table, each wave scales fall and
                                   # gap by this. Toward 1.0 = a longer tail
-WAVE_FLOOR_S = 1.2                # ...but never below. The hard ceiling on
-                                  # difficulty, however long you survive
-WAVE_BREAK_S = 5.0               # rest between waves. You can still move
+WAVE_FLOOR_S = 1.2                # ...but fall never below this. The hard
+                                  # ceiling on difficulty, however long you last
+WAVE_GAP_FLOOR_S = 0.4            # and gap never below this. Separate from the
+                                  # fall floor because gap is now tuned under
+                                  # 1.2s: sharing one floor made wave 7 spawn
+                                  # SLOWER than wave 6, an easier wave 7.
+                                  # Below game.CROWDED_Y * fall a row cannot
+                                  # start anyway, so 0.4 is about as low as is
+                                  # worth setting
+WAVE_BREAK_S = 10               # rest between waves. You can still move
 
 # --- combat -------------------------------------------------------------------
 

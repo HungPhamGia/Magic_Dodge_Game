@@ -37,7 +37,7 @@ from .config import (
     WAND_PX_PER_DEG,
     WINDOW_H,
 )
-from .game import BEATS, GAME_OVER, WAVE_BREAK
+from .game import BEATS, GAME_OVER, MENU, WAVE_BREAK
 
 MONSTER_SIZE = 130
 WALL_H = 86
@@ -66,7 +66,17 @@ HEART_R = 19
 BAR_W, BAR_H = 240, 22  # the reload gauge, bottom left where the legend was
 MATCH_SIZE = 96         # emblem height in the wave break matchup rows
 MATCH_PITCH = 128       # row to row
-MATCH_GAP = 88          # centre of the field to either emblem's centre
+# Four columns across the 608px field: the shape you draw, the spell it throws,
+# the arrow, and the monster it kills. Explicit rather than derived from a gap,
+# because the art either side is not the same width and the row has to look
+# balanced, not be arithmetically symmetric.
+GLYPH_X = 116           # the shape, labelling the spell beside it
+GLYPH_SIZE = 56         # smaller than the art: it is a label, not a subject
+SPELL_X = 220
+ARROW_X1, ARROW_X2 = 280, 342
+MONSTER_X = 452
+OUTLINE_GROW = 16       # how far the traced shape stands off the monster
+OUTLINE_PX = 4          # stroke width, thick enough to read over busy art
 BAD = (200, 50, 50)
 
 ELEMENTS = Path(__file__).parent.parent / "element"
@@ -102,6 +112,9 @@ def frame(screen, game, source, camera=None, wand=None, coach=None, hr=None) -> 
             med=pygame.font.SysFont(None, 62),
             lane=pygame.font.SysFont(None, 96),
             huge=pygame.font.SysFont(None, 124),
+            title=pygame.font.SysFont(None, 112),   # MAGICDODGE is 599px wide
+                                                    # at huge, in a 608px field
+
             coach=pygame.font.SysFont(None, 34),
         )
         _load_art()
@@ -395,7 +408,9 @@ def _draw_hud(screen, game, source, coach=None, hr=None) -> None:
     _hearts(screen, game.player.hp)
     _score(screen, game)
     _hr_readout(screen, hr)
-    if game.state == WAVE_BREAK:
+    if game.state == MENU:
+        _menu(screen, game, hr)
+    elif game.state == WAVE_BREAK:
         _wave_break(screen, game)
     elif game.state == GAME_OVER:
         _game_over(screen, game, coach)
@@ -423,12 +438,38 @@ def _heart(screen, x, y, r, filled) -> None:
     pygame.draw.polygon(screen, BAD if filled else WALL, points, 0 if filled else 2)
 
 
+HR_POS = (26, 92)       # under the hearts, which end at 71. FIELD_TOP is 80,
+                        # so there is no HUD band left down here and this is
+                        # over the playfield by necessity
+HR_PAD = 12             # breathing room inside its backdrop
+HR_VEIL = 205           # backdrop alpha. Opaque enough to read the digits over
+                        # the floor art, sheer enough that a monster spawning in
+                        # the left lane still shows through instead of vanishing
+
+
 def _hr_readout(screen, hr) -> None:
-    """Live heart rate under the hearts, so the effort input is visible on screen."""
+    """Heart rate under the hearts, in the big HUD type.
+
+    Red is a real watch feeding it, grey is the simulated stand-in. Without
+    that you cannot tell a connected watch from a plausible invention, which
+    is the one thing you want to know before a demo starts.
+
+    It sits below FIELD_TOP, so it paints its own backdrop first: otherwise a
+    monster falling down the left lane reads straight through the digits, and
+    the FIELD_TOP rule cuts across them.
+    """
     if hr is None:
         return
-    line = _fonts["small"].render(f"{hr.current()} bpm", True, BAD)
-    screen.blit(line, (26, 82))
+    live = not hr.simulated
+    line = _fonts["med"].render(f"{hr.current()} bpm", True, BAD if live else WALL)
+    x, y = HR_POS
+    panel = pygame.Rect(x - HR_PAD, y - HR_PAD // 2,
+                        line.get_width() + HR_PAD * 2, line.get_height() + HR_PAD)
+    veil = pygame.Surface(panel.size, pygame.SRCALPHA)
+    pygame.draw.rect(veil, (*BG, HR_VEIL), veil.get_rect(), border_radius=8)
+    pygame.draw.rect(veil, BAD if live else GRID, veil.get_rect(), 2, border_radius=8)
+    screen.blit(veil, panel.topleft)
+    screen.blit(line, (x, y))
 
 
 def _score(screen, game) -> None:
@@ -440,24 +481,30 @@ def _score(screen, game) -> None:
 
 
 def _matchups(screen, top: int, size: int) -> None:
-    """Three rows: the spell you cast, and the monster it kills.
+    """Three rows: draw THIS shape, kill THAT monster.
 
     Read off game.BEATS, so it cannot teach a pairing the rules do not play.
-    This replaced a strip of the cycle drawn as a chain, which stated the ring
-    correctly but left you to work the pairing out yourself mid wave. A row
-    just answers the question you actually have.
+
+    Both sides carry their own shape, so the row reads shape beats shape.
+    The left labels the spell, which is the only thing connecting a picture of
+    fire to the key or the wand stroke that throws it; the right names the
+    monster the same way, so an elemental you meet mid wave is already a shape
+    you have seen rather than a creature you have to translate.
     """
-    mid = FIELD_W // 2
     for i, spell in enumerate(CYCLE):
         y = top + i * MATCH_PITCH
         beaten = BEATS[spell]
+        shape_at(screen, spell, COLORS[spell], GLYPH_X, y, GLYPH_SIZE)
         # The spell uses the bolt art, stored rotated head up, so the picture
         # here is the picture you see coming out of the wand.
-        _emblem(screen, spell, COLORS[spell], mid - MATCH_GAP, y,
+        _emblem(screen, spell, COLORS[spell], SPELL_X, y,
                 _content_h(f"bolt_{spell}", size), art=f"bolt_{spell}")
-        _arrow(screen, mid - 40, y, mid + 40, y)
-        _emblem(screen, beaten, COLORS[beaten], mid + MATCH_GAP, y,
+        _arrow(screen, ARROW_X1, y, ARROW_X2, y)
+        _emblem(screen, beaten, COLORS[beaten], MONSTER_X, y,
                 _content_h(beaten, size))
+        # The monster's own shape, drawn last so the art cannot cover it.
+        shape_at(screen, beaten, COLORS[beaten], MONSTER_X, y,
+                 size + OUTLINE_GROW, OUTLINE_PX)
 
 
 def _arrow(screen, x1, y1, x2, y2) -> None:
@@ -498,6 +545,43 @@ def _misfire(screen, game) -> None:
         label,
         (lane_center(game.player.lane) - label.get_width() // 2, PLAYER_ROW_Y - 150),
     )
+
+
+STUCK_MS = 25_000    # waiting this long means the watch is off, not slow
+
+
+def _menu(screen, game, hr) -> None:
+    """The start screen. Waits for the watch, and says so while it waits.
+
+    The gate itself is heart_rate.ready(); this only reports it, so the screen
+    cannot promise a start the loop will refuse. hr is None in the render test
+    and in any caller that has no monitor, which counts as nothing to wait for.
+    """
+    _wash(screen)
+    _center(screen, _fonts["title"], "MAGICDODGE", 210, TEXT)
+
+    ready = hr is None or hr.ready()
+    if hr is not None and hr.device_wanted:
+        if hr.simulated:
+            line, color = "Waiting for the heart rate watch...", WALL
+        else:
+            line, color = f"Heart rate watch ready  -  {hr.current()} bpm", BAD
+    else:
+        line, color = "No heart rate watch  -  effort is simulated", WALL
+    _center(screen, _fonts["small"], line, 360, color)
+
+    # A watch that has not turned up in half a minute is not going to, and the
+    # way out of the wait is a launch flag nobody remembers under demo lights.
+    if not ready and game.t_ms > STUCK_MS:
+        _center(screen, _fonts["small"], "no watch? relaunch with  --no-hr",
+                415, _fade(WALL, 0.6))
+
+    _matchups(screen, 560, MATCH_SIZE)
+
+    # Drawn either way so you know what to press before you may press it, dim
+    # until the gate opens rather than appearing from nowhere.
+    _center(screen, _fonts["med"], "Press SPACE to start", 1000,
+            EMPOWERED if ready else _fade(WALL, 0.45))
 
 
 def _wave_break(screen, game) -> None:

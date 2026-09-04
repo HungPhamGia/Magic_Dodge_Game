@@ -30,6 +30,7 @@ from .config import (
     WAVE_BREAK_S,
     WAVE_ENDLESS,
     WAVE_FLOOR_S,
+    WAVE_GAP_FLOOR_S,
     WAVES,
 )
 
@@ -122,7 +123,7 @@ BEATS = {"circle": "triangle", "triangle": "square", "square": "circle"}
 
 BOLT_SPEED = 1.0 / BOLT_TRAVEL_S      # y units per second, upward
 
-PLAY, WAVE_BREAK, GAME_OVER = "PLAY", "WAVE_BREAK", "GAME_OVER"
+MENU, PLAY, WAVE_BREAK, GAME_OVER = "MENU", "PLAY", "WAVE_BREAK", "GAME_OVER"
 
 
 # =============================================================================
@@ -152,7 +153,11 @@ def wave_config(wave: int) -> dict:
     return {
         **last,
         "fall": max(WAVE_FLOOR_S, last["fall"] * scale),
-        "gap": max(WAVE_FLOOR_S, last["gap"] * scale),
+        # Its own floor. Sharing the fall floor was fine while every gap in the
+        # table sat above 1.2s; now that the last wave spawns under a second
+        # apart, one shared floor would raise wave 7's gap back to 1.2 and make
+        # it spawn slower than wave 6.
+        "gap": max(WAVE_GAP_FLOOR_S, last["gap"] * scale),
     }
 
 
@@ -250,7 +255,7 @@ class Game:
         self.wave = 1
         self.score = 0
         self.combo = 1.0
-        self.state = WAVE_BREAK       # wave 1 starts on the banner
+        self.state = MENU             # the start screen; start() opens wave 1
         self.break_left = WAVE_BREAK_S
         self.spawner = None
         self.t_ms = 0.0
@@ -263,6 +268,17 @@ class Game:
         self.stats = _blank_stats()
         self.feedback = None
         self.scroll = 0.0             # how far he has walked, in threat y units
+
+    def start(self) -> None:
+        """Leave the start screen for wave 1. A no op anywhere else.
+
+        Whether the player is ALLOWED to start is not decided here: this file
+        knows nothing about watches or webcams. main.py holds the gate and
+        only calls this once its sensor is happy.
+        """
+        if self.state == MENU:
+            self.state = WAVE_BREAK       # wave 1 still opens on the banner
+            self.break_left = WAVE_BREAK_S
 
     @property
     def walk_speed(self) -> float:
@@ -283,6 +299,16 @@ class Game:
             setattr(self, timer, max(0.0, getattr(self, timer) - dt * 1000.0))
 
         events = self.source.poll(dt)                                   # 1
+
+        if self.state == MENU:
+            # Nothing runs yet: no spawner, no clock, and the road holds still
+            # so it is obvious the run has not begun. Lane changes are allowed
+            # so you can find the controls while the watch is connecting.
+            for event in events:
+                if isinstance(event, LaneChange):
+                    self.player.lane = event.lane
+            self._emit("idle")
+            return
 
         if self.state == GAME_OVER:
             self._emit("game_over")

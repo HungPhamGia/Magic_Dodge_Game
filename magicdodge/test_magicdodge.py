@@ -395,7 +395,7 @@ def test_wave_difficulty_increases():
 
 def test_the_wave_table_only_gets_harder():
     """A typo in one row is the whole risk of hand written waves."""
-    from .config import WAVE_FLOOR_S
+    from .config import WAVE_FLOOR_S, WAVE_GAP_FLOOR_S
 
     for earlier, later in zip(WAVES, WAVES[1:]):
         assert later["fall"] <= earlier["fall"], "a wave must not slow down"
@@ -403,9 +403,21 @@ def test_the_wave_table_only_gets_harder():
         assert later["monster_lanes"] <= earlier["monster_lanes"]
         assert set(earlier["shapes"]) <= set(later["shapes"]), "shapes only add"
         assert later["rows"] >= 1
-    # However long you last, the floor is the hard ceiling on difficulty.
+    # A gap under CROWDED_Y * fall buys nothing: the row is refused and retried,
+    # so the wave gets longer instead of denser. Tuning below it looks like a
+    # difficulty change and is not one.
+    for wave, row in enumerate(WAVES, 1):
+        assert row["gap"] > CROWDED_Y * row["fall"], (
+            f"wave {wave} gap {row['gap']} is under the crowding floor "
+            f"{CROWDED_Y * row['fall']:.2f}; rows cannot arrive that fast")
+
+    # However long you last, the floors are the hard ceiling on difficulty.
     assert wave_config(99)["fall"] >= WAVE_FLOOR_S
-    assert wave_config(99)["gap"] >= WAVE_FLOOR_S
+    assert wave_config(99)["gap"] >= WAVE_GAP_FLOOR_S
+    # ...and the tail must keep closing across the join, not step back. One
+    # shared floor used to raise the gap here and make wave 7 easier than 6.
+    assert wave_config(len(WAVES) + 1)["gap"] < WAVES[-1]["gap"]
+    assert wave_config(len(WAVES) + 1)["fall"] < WAVES[-1]["fall"]
 
 
 # --- cast input ---------------------------------------------------------------
@@ -747,6 +759,103 @@ def test_every_sprite_loads_and_a_frame_renders():
     game.break_left = 4.2
     draw.frame(screen, game, KeyboardSource())
     pygame.quit()
+
+
+def test_the_start_screen_waits_for_the_watch():
+    """A run must not begin, or be uploaded, on an invented heart rate trace."""
+    from .game import MENU, WAVE_BREAK
+    from .heart_rate import HeartRateMonitor
+
+    class Waiting:
+        state, wave, shake_ms, bolts = MENU, 1, 0, []
+
+    game = Game(FakeSource(), MemoryLog())
+    assert game.state == MENU, "a fresh game opens on the start screen"
+
+    # The menu holds: no clock, no spawner, and he does not walk yet.
+    for _ in range(60 * 3):
+        game.update(1 / 60)
+    assert game.state == MENU and game.scroll == 0.0 and not game.threats
+
+    # A watch was asked for and has not reported, so the gate stays shut.
+    hr = HeartRateMonitor(device_wanted=True)
+    hr.update(1 / 60, Waiting())
+    assert not hr.ready(), "no reading yet"
+
+    # main.py only calls start() when ready(), so the state must not move.
+    if hr.ready():
+        game.start()
+    assert game.state == MENU
+
+    # First reading opens it.
+    hr.push(88)
+    hr.update(1 / 60, Waiting())
+    assert hr.ready() and not hr.simulated
+    game.start()
+    assert game.state == WAVE_BREAK, "SPACE opens wave 1 on the banner"
+    game.start()
+    assert game.state == WAVE_BREAK, "start() elsewhere is a no op"
+
+    # A watch that falls off in the menu shuts the gate again.
+    from .heart_rate import DEVICE_GRACE_S
+    for _ in range(int(60 * DEVICE_GRACE_S) + 120):
+        hr.update(1 / 60, Waiting())
+    assert not hr.ready(), "a dropped watch cannot start a run"
+
+    # No watch asked for: nothing to wait for, so a keyboard playtest starts.
+    assert HeartRateMonitor().ready()
+
+
+def test_a_real_watch_beats_the_simulation():
+    """A pushed reading must survive the update loop, and outlive its gaps.
+
+    It used to not: the easing that shapes the simulation was applied to real
+    readings too, so at 60 FPS a watch reporting once a second contributed
+    0.3% of the displayed value. A watch pinned at 150 showed the simulation's
+    133 and the uploaded record called it real.
+    """
+    from .heart_rate import DEVICE_GRACE_S, HeartRateMonitor
+
+    class Playing:                       # a wave 3 PLAY state, simulated ~133
+        state, wave, shake_ms, bolts = "PLAY", 3, 0, []
+
+    game = Playing()
+    hr = HeartRateMonitor()
+    assert hr.simulated, "no device yet"
+
+    # Scanning and connecting takes about seven seconds, simulated meanwhile.
+    for _ in range(60 * 8):
+        hr.update(1 / 60, game)
+    assert hr.samples, "the stand-in covers the gap"
+    ramped = hr.current()
+
+    # A watch reporting once a second while the game runs at 60.
+    for frame in range(60 * 30):
+        if frame % 60 == 0:
+            hr.push(150)
+        hr.update(1 / 60, game)
+    assert hr.current() == 150, f"the watch says 150, the game shows {hr.current()}"
+    assert not hr.simulated
+    summary = hr.summarize()
+    assert summary["mean_bpm"] > 145, "the log records the watch, not the sim"
+    # The simulated prelude must not survive into the record: it ramps, so it
+    # used to hand the coach a peak the player never had.
+    assert abs(summary["peak_bpm"] - 150) <= 2, (      # +/- the sampling noise
+        f"invented prelude in the record: {summary}")
+    assert ramped != 150, "the prelude really was a different number"
+
+    # It holds the last reading between reports rather than drifting back.
+    for _ in range(int(60 * DEVICE_GRACE_S * 0.8)):
+        hr.update(1 / 60, game)
+    assert hr.current() == 150, "held through a gap shorter than the grace"
+    assert not hr.simulated
+
+    # Past the grace the watch is gone, so the simulation takes over again and
+    # says so -- the number must never freeze on a watch that walked away.
+    for _ in range(60 * 60):
+        hr.update(1 / 60, game)
+    assert hr.simulated, "a dropped watch falls back to the simulation"
+    assert hr.current() < 145, "and actually moves off the last reading"
 
 
 def test_the_road_and_the_stride_run_at_the_threat_speed():

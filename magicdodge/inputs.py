@@ -59,6 +59,7 @@ class KeyboardSource:
         self.quit = False
         self.restart = False
         self.recenter = False
+        self.start = False         # SPACE on the start screen. main.py gates it
         self.t_ms = 0.0            # driven by dt, not by the pygame clock
         self.cool_from = 0.0
         self.cool_until = 0.0
@@ -98,12 +99,15 @@ class KeyboardSource:
         self.lane = lane
         self.cool_until = self.t_ms
         self.restart = False
+        self.start = False         # so R into the menu does not start it again
 
     def _keydown(self, key: int, events: list) -> None:
         if key == pygame.K_ESCAPE:
             self.quit = True
         elif key == pygame.K_r:
             self.restart = True
+        elif key in (pygame.K_SPACE, pygame.K_RETURN):
+            self.start = True
         elif key == pygame.K_z:
             # The wand integrates gyro, so it drifts. Same key the recording
             # scripts use, so the muscle memory carries over.

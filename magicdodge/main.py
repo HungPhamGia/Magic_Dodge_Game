@@ -6,11 +6,16 @@ Run from the repo root with:
     python -m magicdodge.main --camera 0      a different webcam
     python -m magicdodge.main --wand COM7     a serial port instead of Wi-Fi
     python -m magicdodge.main --no-camera --no-wand    keyboard only
-    python -m magicdodge.main --hr-name Band  connect a real BLE heart rate watch
+    python -m magicdodge.main --hr-name Band  narrow the watch scan by name
+    python -m magicdodge.main --no-hr         play without a heart rate watch
     python -m magicdodge.main --windowed      in a window, for debugging
 
-Esc quits, which is the way out of fullscreen. Z recentres the wand, which
-drifts because the firmware integrates gyro.
+The camera, the wand and the heart rate watch are all on by default and all
+turn off the same way. SPACE starts the run from the title screen, and that
+screen waits until the watch is actually sending, so no run can be played on a
+simulated trace and then uploaded as if it were real -- use --no-hr to play
+without one. Esc quits, which is the way out of fullscreen. Z recentres the
+wand, which drifts because the firmware integrates gyro.
 """
 
 import argparse
@@ -133,6 +138,7 @@ def main(
     wand_port: str | None = WAND_PORT,
     hr_device: str | None = None,
     hr_name: str | None = None,
+    use_hr: bool = True,
 ) -> None:
     camera = open_camera(camera_id, confidence) if camera_id is not None else None
     wand = open_wand(wand_port) if wand_port is not None else None
@@ -153,13 +159,20 @@ def main(
     devices = [device for device in (camera, wand, keyboard) if device]
     game = Game(Sources(*devices), log)
     coach = Coach()          # the post-run LLM coach; one per run, reset on restart
-    heart = HeartRateMonitor()   # wrist PPG stand-in; feeds effort into the coach
+    # On by default, like the camera and the wand, and off the same way with
+    # --no-hr. It used to need --hr-name, and forgetting it did not fail: the
+    # game simply never scanned, showed a simulated trace, and uploaded it as a
+    # session. A sensor you have to remember to ask for is a sensor you will
+    # demo without. --hr-name still narrows the scan when several straps are
+    # in the room; without it hr_device.py matches the Heart Rate service.
+    watch_wanted = use_hr
+    heart = HeartRateMonitor(device_wanted=watch_wanted)
     print(f"Logging to {log.path}")
 
     # A real BLE watch, if asked for. The bridge runs on its own thread and
     # calls push() on whichever heart monitor is current, so restart still
     # feeds the new one. Without a watch the simulation above stays in charge.
-    if hr_device or hr_name:
+    if watch_wanted:
         HeartDeviceBridge(lambda bpm: heart.push(bpm),
                           target=hr_device, name=hr_name).start()
 
@@ -185,11 +198,20 @@ def main(
                 where = cloud.upload({"ts": int(time.time()), **summary}, log.path.parent)
                 print(f"Session uploaded to {where}")
 
+            # The start gate. heart.ready() is the whole rule: a watch that was
+            # asked for has to be feeding before wave 1 opens, so no run can
+            # start on a simulated trace and be uploaded as if it were real.
+            if keyboard.start:
+                keyboard.start = False
+                if heart.ready():
+                    game.start()
+
             if keyboard.restart:
                 if game.state == GAME_OVER:
-                    game.reset()
+                    game.reset()                # back to the start screen, which
+                                                # re-checks the watch is still on
                     coach = Coach()             # fresh coach for the next run
-                    heart = HeartRateMonitor()  # fresh heart rate trace
+                    heart = HeartRateMonitor(device_wanted=watch_wanted)
                 keyboard.reset(game.player.lane)
 
             if keyboard.recenter:
@@ -216,7 +238,9 @@ if __name__ == "__main__":
     parser.add_argument("--hr-device", default=None,
                         help="BLE heart rate watch MAC/UUID to connect to")
     parser.add_argument("--hr-name", default=None,
-                        help="connect a heart rate watch by name substring, e.g. Band")
+                        help="narrow the watch scan by name substring, e.g. Band")
+    parser.add_argument("--no-hr", action="store_true",
+                        help="play without a heart rate watch (skips the wait)")
     args = parser.parse_args()
     main(
         None if args.no_camera else args.camera,
@@ -225,4 +249,5 @@ if __name__ == "__main__":
         wand_port=None if args.no_wand else args.wand,
         hr_device=args.hr_device,
         hr_name=args.hr_name,
+        use_hr=not args.no_hr,
     )

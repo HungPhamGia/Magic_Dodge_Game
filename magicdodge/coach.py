@@ -397,7 +397,7 @@ def _fallback(summary: dict) -> dict:
         "headline": f"You reached wave {summary['waves_reached']} with {summary['score']} points.",
         "did_well": did_well[:3],
         "improve": improve[:3],
-        "tip": "Draw the shape that beats the monster: triangle>circle>square>triangle.",
+        "tip": "Draw the shape that beats the monster: triangle > square > circle > triangle.",
         "effort": effort,
         "encouragement": "Nice run — line up the shapes and that score will climb. Press R to go again!",
     }

@@ -59,7 +59,8 @@ python -m magicdodge.main --windowed              windowed, for debugging
 python -m magicdodge.main --camera 0              a different webcam (default 1)
 python -m magicdodge.main --wand COM5             a serial port instead of Wi-Fi
 python -m magicdodge.main --confidence 0.4        looser pose tracking, for bad light
-python -m magicdodge.main --hr-name Band          connect a real BLE heart rate watch
+python -m magicdodge.main --hr-name Band          narrow the watch scan by name
+python -m magicdodge.main --no-hr                 play without a heart rate watch
 ```
 
 ## Difficulty
@@ -150,14 +151,21 @@ A wrist heart rate feeds the coach an effort signal and shows live on the HUD. B
 `magicdodge/heart_rate.py` simulates a plausible trace driven by how intense the game is, so the
 whole pipeline runs and demonstrates without any hardware.
 
-To read a real Bluetooth watch (standard BLE Heart Rate profile, `0x180D`), install `bleak` and
-name your device:
+A real Bluetooth watch (standard BLE Heart Rate profile, `0x180D`) is used whenever one is
+found. Install `bleak` and wear the watch; no flag is needed, because the scan matches the Heart
+Rate service itself rather than a device name:
 
 ```
 pip install bleak
-python -m magicdodge.main --hr-name Band     match a watch by a substring of its name
+python -m magicdodge.main                    finds any heart rate watch in range
+python -m magicdodge.main --hr-name Band     narrow it, if several straps are in the room
 python -m magicdodge.main --hr-device <MAC>  or connect straight to an address or UUID
+python -m magicdodge.main --no-hr            skip the watch, and the wait for it
 ```
+
+The title screen will not start a run until the watch is actually sending, so a session can
+never be played on a simulated trace and then uploaded as if it were real. `--no-hr` is the way
+out when you have no watch to hand.
 
 `magicdodge/hr_device.py` runs the BLE reader (`heart_rate_monitor.py`) on a background thread
 and pushes each reading into the game, so the real trace replaces the simulation and flows into

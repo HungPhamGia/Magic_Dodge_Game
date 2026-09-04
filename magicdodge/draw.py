@@ -333,37 +333,27 @@ def _sky():
 
 
 def _column(field, x, yb, h, w, a, s, inner) -> None:
-    """A detailed stone column with a lit torch, in the dungeon's grey masonry:
-    three shading bands for roundness, brick courses, a capital and a base, and
-    a bracketed flame on the side facing the road. a fades it with distance."""
+    """A stone column that plunges straight down into the road's edge wall: three
+    shading bands for roundness, brick courses, a capital on top, and a lit torch
+    on the road-facing side. No horizontal foot -- it just sinks into the wall."""
     x, w = int(x), max(3, int(w))
     top = int(yb - h)
+    sink = max(6, int(14 * s))                    # plunge below the edge into the wall
+    bottom = int(yb) + sink
+    hh = bottom - top
     light, mid, dark = _fade((162, 156, 156), a), _fade((120, 114, 118), a), _fade((78, 74, 82), a)
-    # contact shadow, so the column reads as planted on the floor, not floating
-    sw2, sh2 = int(w * 2.8), max(5, int(0.06 * h))
-    shadow = pygame.Surface((sw2, sh2), pygame.SRCALPHA)
-    pygame.draw.ellipse(shadow, (0, 0, 0, int(170 * a)), shadow.get_rect())
-    field.blit(shadow, (x - sw2 // 2, int(yb) - sh2 // 2 + max(2, int(4 * s))))
-    # shaft, rounded by three vertical shading bands
-    pygame.draw.rect(field, mid, (x - w // 2, top, w, int(h)))
-    pygame.draw.rect(field, light, (x - w // 2, top, max(1, w // 3), int(h)))
-    pygame.draw.rect(field, dark, (x + w // 6, top, max(1, w // 3), int(h)))
+    # shaft, straight down into the wall, rounded by three vertical shading bands
+    pygame.draw.rect(field, mid, (x - w // 2, top, w, hh))
+    pygame.draw.rect(field, light, (x - w // 2, top, max(1, w // 3), hh))
+    pygame.draw.rect(field, dark, (x + w // 6, top, max(1, w // 3), hh))
     # brick courses
     seg = max(6, int(0.09 * h))
-    for by in range(top + seg, int(yb), seg):
+    for by in range(top + seg, bottom, seg):
         pygame.draw.line(field, dark, (x - w // 2, by), (x + w // 2, by), 1)
-    # capital at the top
+    # capital at the top only (no base -- the shaft embeds into the wall)
     cw, ch = int(w * 1.5), max(3, int(0.055 * h))
     pygame.draw.rect(field, light, (x - cw // 2, top - ch, cw, ch))
     pygame.draw.rect(field, dark, (x - cw // 2, top - ch, cw, ch), 1)
-    # base plinth: a wider stepped block that sits on, and slightly sinks into,
-    # the floor so the column is clearly planted, not hovering
-    sink = max(3, int(6 * s))
-    pw, ph = int(w * 1.8), max(4, int(0.08 * h))
-    py = int(yb) - ph + sink
-    pygame.draw.rect(field, mid, (x - pw // 2, py, pw, ph + sink))
-    pygame.draw.rect(field, light, (x - pw // 2, py, pw, max(1, int(ph * 0.35))))
-    pygame.draw.rect(field, dark, (x - pw // 2, py, pw, ph + sink), 1)
     # a flaming torch on the inner side, only once the column is solid enough
     if a > 0.4:
         fx = x + inner * int(w * 0.55)

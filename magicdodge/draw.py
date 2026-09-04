@@ -339,6 +339,11 @@ def _column(field, x, yb, h, w, a, s, inner) -> None:
     x, w = int(x), max(3, int(w))
     top = int(yb - h)
     light, mid, dark = _fade((162, 156, 156), a), _fade((120, 114, 118), a), _fade((78, 74, 82), a)
+    # contact shadow, so the column reads as planted on the floor, not floating
+    sw2, sh2 = int(w * 2.2), max(4, int(0.05 * h))
+    shadow = pygame.Surface((sw2, sh2), pygame.SRCALPHA)
+    pygame.draw.ellipse(shadow, (0, 0, 0, int(130 * a)), shadow.get_rect())
+    field.blit(shadow, (x - sw2 // 2, int(yb) - sh2 // 2))
     # shaft, rounded by three vertical shading bands
     pygame.draw.rect(field, mid, (x - w // 2, top, w, int(h)))
     pygame.draw.rect(field, light, (x - w // 2, top, max(1, w // 3), int(h)))
@@ -387,7 +392,7 @@ def _persp_columns(field, game) -> None:
             continue
         s = _persp(t)
         h, w = 360 * s, max(3, int(42 * s))
-        for off, inner in ((-1.9, 1), (1.9, -1)):
+        for off, inner in ((-1.62, 1), (1.62, -1)):    # on the floor's edge, not beyond it
             x, yb = _edge(off, t)
             _column(field, x, yb, h, w, a, s, inner)
 

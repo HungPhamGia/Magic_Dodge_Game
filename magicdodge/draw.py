@@ -333,14 +333,21 @@ def _sky():
 
 
 def _persp_columns(field, game) -> None:
-    """Stone columns with torches down both sides of the road, receding to the
-    vanishing point and sliding toward you (forward). Each fades in at the far
-    end and out at the near end, so wrapping around the loop never pops."""
-    scroll = road_px(game)
-    n = 8
-    phase = (scroll * 0.35) % 1.0
-    for t in sorted(((k / n) + phase) % 1.0 for k in range(n)):   # far first
-        a = min(t / 0.18, (1.0 - t) / 0.12, 1.0)                  # fade both ends
+    """Stone columns with torches, planted at fixed points along the road and
+    carried by the SAME scroll as the floor, so they travel with the road toward
+    you instead of cycling in place. Each one enters faded at the far end and
+    fades out as it reaches you, so there is no pop when it leaves the window."""
+    R = road_px(game)                      # distance walked, same units as the floor
+    view = float(FIELD_BOTTOM - FIELD_TOP)  # one screenful of travel ahead
+    spacing = view / 5.0                    # gap between column pairs
+    first = int(R // spacing)
+    for m in range(first, first + 8):
+        rel = m * spacing - R               # how far ahead this column still is
+        if rel < 0.0 or rel > view:
+            continue
+        t = 1.0 - rel / view                # 0 far, 1 near -- moves with the road
+        a = max(0.0, min((view - rel) / (view * 0.30),   # fade in at the far end
+                         rel / (view * 0.14), 1.0))       # fade out as it nears
         if a <= 0.03:
             continue
         s = _persp(t)
@@ -350,7 +357,7 @@ def _persp_columns(field, game) -> None:
             x, yb = _edge(off, t)
             pygame.draw.rect(field, stone, (int(x - w / 2), int(yb - h), w, h))
             _blit_glow(field, (255, 178, 74), int(x), int(yb - h), max(6, int(30 * s * a)))
-            if a > 0.55:
+            if a > 0.6:
                 pygame.draw.circle(field, (255, 214, 140), (int(x), int(yb - h)),
                                    max(2, int(6 * s)))
 

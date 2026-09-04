@@ -106,9 +106,19 @@ class Bolt:
 
 # =============================================================================
 # The beat cycle. Each spell beats one shape and loses to the other.
+#
+# Read it as the elements the art actually draws, which is how a player meets
+# it. circle is water, triangle is fire, square is earth:
+#
+#     water douses fire        circle   -> triangle
+#     fire scorches earth      triangle -> square
+#     earth soaks up water     square   -> circle
+#
+# draw.CYCLE walks this table rather than repeating it, so the on screen
+# legend cannot teach a cycle the rules do not play.
 # =============================================================================
 
-BEATS = {"triangle": "circle", "circle": "square", "square": "triangle"}
+BEATS = {"circle": "triangle", "triangle": "square", "square": "circle"}
 
 BOLT_SPEED = 1.0 / BOLT_TRAVEL_S      # y units per second, upward
 
@@ -252,6 +262,18 @@ class Game:
         self.channeling = False
         self.stats = _blank_stats()
         self.feedback = None
+        self.scroll = 0.0             # how far he has walked, in threat y units
+
+    @property
+    def walk_speed(self) -> float:
+        """How fast the ground goes by, in y units per second.
+
+        Deliberately the same number the spawner gives a threat: during PLAY
+        the spawner was built from this same wave, so a monster holds still
+        against the road and only the player closes on it. Drawing reads this
+        for both the scroll and the walk cadence, so the feet cannot slide.
+        """
+        return 1.0 / wave_config(self.wave)["fall"]
 
     # --- one frame, in this exact order --------------------------------------
 
@@ -265,6 +287,10 @@ class Game:
         if self.state == GAME_OVER:
             self._emit("game_over")
             return
+
+        # Below the GAME_OVER return and above everything else, so he walks
+        # through the wave break as well as the wave, and stops when he dies.
+        self.scroll += self.walk_speed * dt
 
         if self.state == WAVE_BREAK:
             for event in events:

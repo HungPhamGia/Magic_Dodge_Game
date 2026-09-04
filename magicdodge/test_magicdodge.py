@@ -71,7 +71,34 @@ def wall(lane=1, y=0.5, speed=0.0) -> Threat:
     return Threat(lane=lane, y=y, kind="wall", shape=None, speed=speed)
 
 
+def killer(shape: str) -> str:
+    """The spell that kills this shape, read off the rules themselves.
+
+    The tests below are about mechanics, not about which element wins, so they
+    ask for the pair rather than naming it. Rewriting the cycle then costs one
+    edit in game.BEATS instead of a sweep through this file. The cycle itself
+    is pinned literally in test_beat_cycle_matches_the_elements, which is the
+    one place that would catch BEATS being wrong.
+    """
+    return next(spell for spell, beaten in BEATS.items() if beaten == shape)
+
+
+def loser(shape: str) -> str:
+    """The spell this shape beats, so casting it empowers the monster."""
+    return BEATS[shape]
+
+
 # --- beat cycle ---------------------------------------------------------------
+
+
+def test_beat_cycle_matches_the_elements():
+    """The rule as a player meets it, in the elements the art draws.
+
+    circle is water, triangle is fire, square is earth.
+    """
+    assert BEATS["circle"] == "triangle", "water douses fire"
+    assert BEATS["triangle"] == "square", "fire scorches earth"
+    assert BEATS["square"] == "circle", "earth soaks up water"
 
 
 def test_beat_cycle_is_a_cycle():
@@ -83,9 +110,9 @@ def test_beat_cycle_is_a_cycle():
 def test_kill():
     game = playing()
     game.threats.append(monster(shape="circle"))
-    game.bolts.append(Bolt(lane=1, y=0.6, shape="triangle"))
+    game.bolts.append(Bolt(lane=1, y=0.6, shape=killer("circle")))
     game.update(0.05)
-    assert game.threats == [], "triangle beats circle"
+    assert game.threats == [], "the spell that beats it kills it"
     assert game.bolts == []
     assert game.score == SCORE_KILL
     assert game.combo == 1.5
@@ -110,14 +137,14 @@ def test_empower_once_only():
     target = monster(shape="circle", speed=1.0)
     game.threats.append(target)
     game.combo = 3.0
-    game.bolts.append(Bolt(lane=1, y=0.6, shape="square"))
+    game.bolts.append(Bolt(lane=1, y=0.6, shape=loser("circle")))
     game.update(0.05)
     assert target.empowered
     assert target.speed == 1.0 * EMPOWER_SPEED_MULT
     assert game.combo == 1.0, "empowering breaks the combo"
 
     target.y = 0.5
-    game.bolts.append(Bolt(lane=1, y=0.6, shape="square"))
+    game.bolts.append(Bolt(lane=1, y=0.6, shape=loser("circle")))
     game.update(0.05)
     assert target.speed == 1.0 * EMPOWER_SPEED_MULT, "the multiplier must not stack"
 
@@ -141,7 +168,7 @@ def test_swept_hit_is_nearest_to_player():
     game = playing()
     near, far = monster(y=0.9, shape="circle"), monster(y=0.4, shape="circle")
     game.threats += [far, near]
-    game.bolts.append(Bolt(lane=1, y=1.0, shape="triangle"))
+    game.bolts.append(Bolt(lane=1, y=1.0, shape=killer("circle")))
     game.update(0.5)                    # one frame crosses the whole field
     assert near not in game.threats, "the closest threat is hit first"
     assert far in game.threats
@@ -151,7 +178,7 @@ def test_bolt_cannot_tunnel():
     game = playing()
     target = monster(y=0.5, shape="circle")
     game.threats.append(target)
-    game.bolts.append(Bolt(lane=1, y=1.0, shape="triangle"))
+    game.bolts.append(Bolt(lane=1, y=1.0, shape=killer("circle")))
     game.update(1.0)                    # a 4 unit step over a 1 unit field
     assert game.threats == [], "a huge dt must not step past the threat"
 
@@ -219,7 +246,7 @@ def test_early_kill_pays_more_and_scales_with_combo():
     game = playing()
     game.combo = 2.0
     game.threats.append(monster(y=0.20, shape="circle"))
-    game.bolts.append(Bolt(lane=1, y=0.30, shape="triangle"))
+    game.bolts.append(Bolt(lane=1, y=0.30, shape=killer("circle")))
     game.update(0.05)
     assert game.score == int(SCORE_EARLY_KILL * 2.0)
 
@@ -229,7 +256,7 @@ def test_combo_caps():
     game.threats.append(monster(lane=0, y=0.1))   # keeps the wave from ending
     for _ in range(12):
         game.threats.append(monster(shape="circle"))
-        game.bolts.append(Bolt(lane=1, y=0.6, shape="triangle"))
+        game.bolts.append(Bolt(lane=1, y=0.6, shape=killer("circle")))
         game.update(0.05)
     assert game.combo == 4.0
 
@@ -253,14 +280,14 @@ def test_cast_log_shape():
     log = MemoryLog()
     cast = CastResolved("triangle", 0.9, 812, True)
     game = playing(log=log)
-    game.threats.append(monster(y=0.5, shape="circle"))
+    game.threats.append(monster(y=0.5, shape="square"))
     game.bolts.append(Bolt(lane=1, y=0.6, shape="triangle", cast=cast))
     game.update(0.05)
 
     line = log.records[0]
     assert line["outcome"] == "kill"
     assert line["shape_cast"] == "triangle"
-    assert line["shape_target"] == "circle"
+    assert line["shape_target"] == "square", "fire scorches earth"
     assert line["duration_ms"] == 812
     assert line["hit_y"] == 0.5
     assert set(line) == {
@@ -284,7 +311,7 @@ def test_wave_summary_written():
     log = MemoryLog()
     game = playing(log=log)
     game.threats.append(monster(shape="circle"))
-    game.bolts.append(Bolt(lane=1, y=0.6, shape="triangle"))
+    game.bolts.append(Bolt(lane=1, y=0.6, shape=killer("circle")))
     game.update(0.05)                   # kill empties the field, wave completes
     summary = [r for r in log.records if r.get("type") == "wave_summary"]
     assert len(summary) == 1
@@ -649,6 +676,116 @@ def test_wand_confidence_falls_with_the_score():
     assert wand_confidence(60.0, 60.0) == 0.0
     assert wand_confidence(999.0, 60.0) == 0.0, "clamped, never negative"
     assert wand_confidence(12.0, 60.0) > wand_confidence(24.0, 60.0)
+
+
+# --- artwork ------------------------------------------------------------------
+#
+# Also pygame, so also a local import. Renders one frame headless: this is what
+# fails if a filename in draw.SPRITES, the element/ path, or an alpha channel
+# ever breaks.
+
+
+def test_every_sprite_loads_and_a_frame_renders():
+    import os
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    import pygame
+
+    from . import draw
+    from .config import FIELD_W, WINDOW_H
+    from .inputs import KeyboardSource
+
+    pygame.init()
+    screen = pygame.display.set_mode((FIELD_W, WINDOW_H))
+
+    game = playing()
+    game.threats = [monster(lane=0, shape="triangle"), monster(lane=1, shape="circle"),
+                    monster(lane=2, shape="square", speed=0.0), wall(lane=2, y=0.2)]
+    game.threats[2].empowered = True
+    game.bolts = [Bolt(lane=i, y=0.6, shape=s)
+                  for i, s in enumerate(("triangle", "circle", "square"))]
+    draw.frame(screen, game, KeyboardSource())      # loads element/ on first call
+
+    assert draw._backdrop is not None, "element/Background.png did not load"
+    for name in draw.SPRITES:
+        art = draw._sprite(name, 130)
+        assert art is not None, f"no art for {name}"
+        assert art.get_height() == 130
+        assert art.get_bounding_rect().width > 1, f"{name} is blank or fully clear"
+
+    # Lanes sit on the backdrop's floor, so nothing may hang over the masonry.
+    # This is what fails if MONSTER_SIZE or PLAYER_ART_H is raised too far.
+    from .config import LANES, PATH_LEFT, PATH_RIGHT
+
+    widest = max([draw.MONSTER_SIZE] + [draw._sprite(f"player{i}", draw.PLAYER_ART_H).get_width()
+                                        for i in range(len(draw.WALK))])
+    assert draw.lane_center(0) - widest // 2 >= PATH_LEFT, "lane 0 overhangs the wall"
+    assert draw.lane_center(LANES - 1) + widest // 2 <= PATH_RIGHT, "lane 2 overhangs"
+
+    # The spell art carries a big invisible glow and each file encloses its
+    # content differently, so _load_art crops before scaling. Without that the
+    # earth bolt renders about 1.7x wider than the water one.
+    from .config import LANE_W
+
+    widths = [draw._sprite(f"bolt_{s}", draw.BOLT_ART_H).get_width()
+              for s in ("triangle", "circle", "square")]
+    assert max(widths) <= 1.4 * min(widths), f"bolt art badly mismatched: {widths}"
+    assert max(widths) < LANE_W, f"a bolt is wider than its lane: {widths}"
+
+    # The wave break rows are read off BEATS, but which element they open on
+    # is a presentation choice that nothing else would catch if it slipped.
+    assert draw.CYCLE[0] == "triangle", "wave break rows start on fire"
+    rows = [(spell, BEATS[spell]) for spell in draw.CYCLE]
+    assert len(rows) == len(BEATS)
+    assert {s for s, _ in rows} == {m for _, m in rows} == set(BEATS), rows
+
+    draw.frame(screen, game, KeyboardSource())      # again, off the caches
+
+    from .game import WAVE_BREAK
+
+    game.state = WAVE_BREAK                         # exercises _matchups
+    game.break_left = 4.2
+    draw.frame(screen, game, KeyboardSource())
+    pygame.quit()
+
+
+def test_the_road_and_the_stride_run_at_the_threat_speed():
+    """Walking, falling and the walk cycle are all one number: walk_speed.
+
+    If the road and the threats ever drift apart the monsters slide along the
+    ground instead of standing on it, which is the whole illusion.
+    """
+    from . import draw
+    from .config import FIELD_BOTTOM, FIELD_TOP
+    from .game import PLAY
+
+    game = playing()
+    assert game.scroll == 0.0
+    assert game.walk_speed == game.spawner.speed, "road and threats must agree"
+
+    # Read it first: this wave's budget is empty, so the update finishes the
+    # wave and walk_speed is the next wave's by the time it returns.
+    slow = game.walk_speed
+    game.update(1.0)
+    assert abs(game.scroll - slow) < 1e-9, "one second of walking"
+
+    # A later wave walks faster, with no second knob to keep in step.
+    game.wave = len(WAVES)
+    assert game.walk_speed > slow
+
+    # Dead men do not walk.
+    game.state = GAME_OVER
+    stopped = game.scroll
+    game.update(1.0)
+    assert game.scroll == stopped
+
+    # The cycle reaches every frame and wraps, never indexing past the art.
+    game.state = PLAY
+    seen = set()
+    for step in range(len(draw.WALK) * 3):
+        game.scroll = step * draw.WALK_STEP_PX / (FIELD_BOTTOM - FIELD_TOP)
+        seen.add(int(draw.road_px(game) / draw.WALK_STEP_PX) % len(draw.WALK))
+    assert seen == set(range(len(draw.WALK))), seen
 
 
 def main() -> int:

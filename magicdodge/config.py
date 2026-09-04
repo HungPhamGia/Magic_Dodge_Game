@@ -16,7 +16,16 @@ FPS = 60                          # frame cap only; dt is real elapsed time
 # --- layout -------------------------------------------------------------------
 
 LANES = 3                         # not a free knob: draw and camera assume it
-LANE_W = FIELD_W // LANES         # 202, derived
+
+# Lanes sit on the walkable floor of element/Background.png, not across the
+# whole window: the stone border either side is wall, and a monster centred on
+# a plain third of FIELD_W stands half on the masonry. Measured off the scaled
+# image -- the floor's edge highlight is at x=79 and x=529, the wall's shadow
+# line just inside it at 62 and 550. Re-measure these two if the art changes.
+PATH_LEFT = 62                    # first walkable pixel
+PATH_RIGHT = 550                  # last walkable pixel
+PATH_W = PATH_RIGHT - PATH_LEFT   # 446, derived
+LANE_W = PATH_W // LANES          # 148, derived. Was FIELD_W // LANES = 202
 FIELD_TOP = 80                    # pixel y for grid y = 0.0, where threats spawn
 FIELD_BOTTOM = 1120               # pixel y for grid y = 1.0, where they hit you
 PLAYER_ROW_Y = FIELD_BOTTOM       # derived: hits land where the player is drawn
@@ -30,7 +39,7 @@ IFRAME_MS = 800                   # invulnerable after a hit, so one row = one h
 
 CAST_COOLDOWN_MS = 400            # min gap between casts. Lower = shoot faster
 MISFIRE_LOCKOUT_MS = 500          # frozen out after a reject. Only a wand misfires
-BOLT_TRAVEL_S = 0.25              # bolt crosses the field this fast. Raise = slower
+BOLT_TRAVEL_S = 1              # bolt crosses the field this fast. Raise = slower
 
 # --- camera control (inputs.CameraSource) -------------------------------------
 
@@ -78,10 +87,11 @@ WAND_CALIBRATE_S = 6.0            # wait for "# ready" after the reboot. Measure
 #                  wall, so this is how much of the row you may stand in
 #   shapes         the MONSTER shapes this wave sends. NOT what you draw: you
 #                  kill a monster with the spell that beats it, so a wave of
-#                  squares is a wave of circles to draw. See game.BEATS:
-#                      square monster   -> draw circle
-#                      triangle monster -> draw square
-#                      circle monster   -> draw triangle
+#                  squares is a wave of triangles to draw. See game.BEATS,
+#                  where circle is water, triangle is fire, square is earth:
+#                      square monster   (earth) -> draw triangle (fire)
+#                      triangle monster (fire)  -> draw circle   (water)
+#                      circle monster   (water) -> draw square   (earth)
 #
 # Lower fall and gap = harder. Editing a row changes that wave and no other,
 # which is the whole point of a table: what you see is what wave 4 plays like,
@@ -90,11 +100,11 @@ WAND_CALIBRATE_S = 6.0            # wait for "# ready" after the reboot. Measure
 WAVES = [
     # fall  gap  rows  monster_lanes  shapes            (you draw)
     {"fall": 8.0, "gap": 4.0, "rows": 5, "monster_lanes": 2,
-     "shapes": ["square"]},                             # circle
+     "shapes": ["square"]},                             # triangle
     {"fall": 7.0, "gap": 3.5, "rows": 5, "monster_lanes": 2,
-     "shapes": ["square", "triangle"]},                 # circle, square
+     "shapes": ["square", "triangle"]},                 # triangle, circle
     {"fall": 6.0, "gap": 3.0, "rows": 5, "monster_lanes": 1,
-     "shapes": ["square", "triangle"]},                 # circle, square
+     "shapes": ["square", "triangle"]},                 # triangle, circle
     {"fall": 5.0, "gap": 2.5, "rows": 6, "monster_lanes": 1,
      "shapes": ["square", "triangle", "circle"]},       # all three
     {"fall": 4.0, "gap": 2.0, "rows": 6, "monster_lanes": 1,
@@ -106,7 +116,7 @@ WAVE_ENDLESS = 0.9                # past the table, each wave scales fall and
                                   # gap by this. Toward 1.0 = a longer tail
 WAVE_FLOOR_S = 1.2                # ...but never below. The hard ceiling on
                                   # difficulty, however long you survive
-WAVE_BREAK_S = 15.0               # rest between waves. You can still move
+WAVE_BREAK_S = 5.0               # rest between waves. You can still move
 
 # --- combat -------------------------------------------------------------------
 
@@ -126,18 +136,18 @@ COMBO_CAP = 4.0                   # ceiling. Resets on misfire, damage, escape, 
 SHAKE_MS = 150                    # screen shake after a block or a hit
 SHAKE_PX = 6                      # how far the field jumps while shaking
 
-# --- palette (light theme: darkened shapes so they hold up on a pale field) ----
+# --- palette (dark theme, to sit on element/Background.png's dungeon stone) ---
 
 COLORS = {                        # one colour per spell, shared by monster,
-    "triangle": (206,  42,  42),  # bolt and legend so they can never drift
-    "circle":   ( 30, 100, 200),
-    "square":   ( 38, 138,  66),
+    "triangle": (232,  76,  76),  # bolt, sigil and legend so they can never drift
+    "circle":   ( 74, 144, 226),
+    "square":   ( 92, 184, 108),
 }
-BG        = (247, 247, 250)       # page white, behind everything
-GRID      = (204, 206, 218)       # lane dividers and the column edge
-PLAYER    = ( 34,  36,  48)       # the player triangle
-WALL      = (142, 146, 162)       # walls, and the dimmer HUD text
-EMPOWERED = (214, 130,  10)       # glow outline on a sped-up monster
-TEXT      = ( 32,  34,  44)       # score, wave banner, lane readout
-VEIL      = (247, 247, 250, 210)  # wave break and game over wash; alpha keeps
+BG        = ( 18,  18,  24)       # behind everything, and what _fade blends to
+GRID      = ( 62,  62,  78)       # column edge and the FIELD_TOP rule
+PLAYER    = (240, 240, 245)       # the fallback triangle, when the art is missing
+WALL      = (150, 150, 168)       # walls, and the dimmer HUD text
+EMPOWERED = (255, 200,  60)       # glow outline on a sped-up monster
+TEXT      = (232, 232, 240)       # score, wave banner, lane readout
+VEIL      = ( 12,  12,  18, 205)  # wave break and game over wash; alpha keeps
                                   # the field readable underneath

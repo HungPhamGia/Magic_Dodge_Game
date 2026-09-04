@@ -1,11 +1,16 @@
-"""Everything you see. Drawing primitives only, no assets.
+"""Everything you see. Art from element/, primitives for the rest.
 
 One entry point: frame(screen, game, source). The field is drawn first onto its
 own surface so a screen shake can offset it, then the HUD goes on top at rest.
+
+Every sprite is optional. A missing or unreadable file falls back to the drawn
+glyph it replaced, so a half-populated element/ folder costs you the art, not
+the playtest.
 """
 
 import math
 import random
+from pathlib import Path
 
 import pygame
 
@@ -21,6 +26,7 @@ from .config import (
     GRID,
     LANE_W,
     LANES,
+    PATH_LEFT,
     PLAYER,
     PLAYER_HP,
     PLAYER_ROW_Y,
@@ -31,20 +37,60 @@ from .config import (
     WAND_PX_PER_DEG,
     WINDOW_H,
 )
-from .game import GAME_OVER, WAVE_BREAK
+from .game import BEATS, GAME_OVER, WAVE_BREAK
 
 MONSTER_SIZE = 130
 WALL_H = 86
-BOLT_R = 13
-PLAYER_SIZE = 78
+BOLT_R = 13             # the fallback circle, when the spell art is missing
+BOLT_ART_H = 56         # the spell in flight. About 0.43 of MONSTER_SIZE, so
+                        # it reads as a projectile without hiding its target
+BOLT_ALPHA = 16         # alpha above which a bolt pixel counts as content.
+                        # The art carries a huge sub-16 glow that never
+                        # renders; see _load_art for why that matters
+PLAYER_SIZE = 78        # the fallback triangle, when character.png is missing
+PLAYER_ART_H = 138      # the wizard. Aspect 0.954, so 131 wide in a 148 lane
+WALK_STEP_PX = 31       # road travelled per walk frame. THE cadence knob: a
+                        # full 4 frame cycle covers 124px, about his own
+                        # height, so the stride matches the ground going by.
+                        # Lower = faster feet for the same speed
 
-CYCLE = ["triangle", "circle", "square"]
+# Walked off game.BEATS, never written down twice: in the legend an arrow
+# always means "beats", so it cannot drift from the rules it teaches.
+# Seeded on fire and walked round: fire kills earth, earth kills water, water
+# kills fire. The seed lives here and not in game.BEATS because which element
+# the wave break opens on is presentation, not a rule.
+CYCLE = ["triangle"]
+while len(CYCLE) < len(BEATS):
+    CYCLE.append(BEATS[CYCLE[-1]])
 HEART_R = 19
-BAR_W, BAR_H = 170, 22
+BAR_W, BAR_H = 240, 22  # the reload gauge, bottom left where the legend was
+MATCH_SIZE = 96         # emblem height in the wave break matchup rows
+MATCH_PITCH = 128       # row to row
+MATCH_GAP = 88          # centre of the field to either emblem's centre
 BAD = (200, 50, 50)
+
+ELEMENTS = Path(__file__).parent.parent / "element"
+# The walk cycle, in order. All four are drawn to the bottom of their own
+# canvas, so aligning them midbottom keeps his feet on the road; the robe and
+# staff move between frames because they are meant to.
+WALK = ["character.png", "character2.png", "character3.png", "character4.png"]
+# The spell art, drawn on the bolt rather than on the monster. Listed apart
+# because it is prepared differently on the way in: see _load_art.
+BOLT_ART = {"triangle": "fire.png", "circle": "water.png", "square": "earth.png"}
+SPRITES = {
+    "triangle": "fire_mons.png",
+    "circle":   "water_mons.png",
+    "square":   "earth_mons.png",
+    **{f"player{i}": name for i, name in enumerate(WALK)},
+    **{f"bolt_{shape}": name for shape, name in BOLT_ART.items()},
+}
 
 _field = None       # scratch surface for the shake, made on first frame
 _fonts: dict = {}
+_backdrop = None    # element/Background.png at field size, or None
+_raw: dict = {}     # name -> the file as loaded
+_scaled: dict = {}  # (name, height) -> surface at that height, or None
+_fill: dict = {}    # name -> how much of its canvas height is real content
 
 
 def frame(screen, game, source, camera=None, wand=None) -> None:
@@ -57,6 +103,7 @@ def frame(screen, game, source, camera=None, wand=None) -> None:
             lane=pygame.font.SysFont(None, 96),
             huge=pygame.font.SysFont(None, 124),
         )
+        _load_art()
 
     _draw_field(_field, game)
     screen.fill(BG)
@@ -80,8 +127,22 @@ def screen_y(grid_y: float) -> float:
     return FIELD_TOP + grid_y * (FIELD_BOTTOM - FIELD_TOP)
 
 
+def road_px(game) -> float:
+    """How far he has walked, in pixels.
+
+    game.scroll counts in the same y units a threat falls in, so this is the
+    one conversion that keeps the road, the threats and the stride agreeing.
+    """
+    return game.scroll * (FIELD_BOTTOM - FIELD_TOP)
+
+
+def lane_left(lane: int) -> int:
+    """Left pixel of a lane. Lanes live on the art's floor, not the window."""
+    return PATH_LEFT + lane * LANE_W
+
+
 def lane_center(lane: int) -> int:
-    return lane * LANE_W + LANE_W // 2
+    return lane_left(lane) + LANE_W // 2
 
 
 def shape_at(surface, shape, color, cx, cy, size, width=0) -> None:
@@ -103,12 +164,116 @@ def shape_at(surface, shape, color, cx, cy, size, width=0) -> None:
 
 
 # =============================================================================
+# The art
+# =============================================================================
+
+
+def _load_art() -> None:
+    """element/, once, after set_mode. A missing file is a warning, not a stop."""
+    global _backdrop
+    try:
+        art = pygame.image.load(str(ELEMENTS / "Background.png")).convert()
+        _backdrop = pygame.transform.smoothscale(art, (FIELD_W, WINDOW_H))
+    except Exception as error:
+        print(f"No backdrop ({error}); flat colour.")
+    for name, filename in SPRITES.items():
+        try:
+            art = pygame.image.load(str(ELEMENTS / filename)).convert_alpha()
+        except Exception as error:
+            print(f"No art for {name} ({error}); drawing the shape instead.")
+            continue
+        if name.startswith("bolt_"):
+            # Crop before anything else. About 85% of each spell canvas is a
+            # sub-BOLT_ALPHA glow that never renders, and the three enclose
+            # their content at very different sizes -- earth fills 78% of its
+            # canvas, water 46% -- so scaling by canvas would draw earth half
+            # again as big as water. Cropping to real content equalises them.
+            art = art.subsurface(art.get_bounding_rect(min_alpha=BOLT_ALPHA)).copy()
+            # Then turn it round: a bolt flies UP the field, and all of this
+            # art is drawn mass down, wisps up. Unrotated the wisps would lead.
+            art = pygame.transform.rotate(art, 180)
+        _raw[name] = art
+        # Monster art sits in 18-30% of canvas padding while the bolt art is
+        # cropped flush, so the same `size` draws them at visibly different
+        # scales. Recorded here so _content_h can cancel it out.
+        _fill[name] = art.get_bounding_rect(min_alpha=BOLT_ALPHA).h / art.get_height()
+
+
+def _sprite(name: str, height: int):
+    """The art at that height, kept. None means draw the glyph instead.
+
+    smoothscale because every asset is a heavy downscale -- the monsters land
+    at about 0.14x, the wizard at 0.12x -- and nearest at that ratio throws
+    away most of the source and aliases. The blocks are big enough that
+    bilinear still reads as pixel art.
+    """
+    key = (name, height)
+    if key not in _scaled:
+        art = _raw.get(name)
+        if art is None:
+            _scaled[key] = None
+        else:
+            w, h = art.get_size()
+            _scaled[key] = pygame.transform.smoothscale(
+                art, (max(1, round(w * height / h)), height)
+            )
+    return _scaled[key]
+
+
+def _content_h(name: str, visible: int) -> int:
+    """Canvas height that renders `visible` pixels of actual creature.
+
+    Only worth using where two pieces of art are compared side by side -- the
+    wave break rows -- since that is where unequal canvas padding shows. The
+    field sizes monsters by canvas as before, so nothing in play moves.
+    """
+    return round(visible / (_fill.get(name) or 1.0))
+
+
+def _emblem(surface, shape, color, cx, cy, size, art=None) -> None:
+    """The art for this shape, or the plain shape when there is no art.
+
+    The shape is a fallback now, not a label drawn alongside: with the
+    elementals in, the creature is its own identity and a ring round it as
+    well only crowds the lane. A missing PNG still draws and still plays.
+
+    art picks which picture: the monster by default, or a bolt_ entry for the
+    spell that kills it. Either way the fallback is the shape, because the
+    shape is what the rules are written in.
+    """
+    sprite = _sprite(art or shape, size)
+    if sprite is None:
+        shape_at(surface, shape, color, cx, cy, size)
+    else:
+        surface.blit(sprite, sprite.get_rect(center=(int(cx), int(cy))))
+
+
+# =============================================================================
 # The field
 # =============================================================================
 
 
 def _draw_field(field, game) -> None:
-    field.fill(BG)
+    if _backdrop is None:
+        field.fill(BG)
+    else:
+        # The road slides down at exactly the speed threats fall, so standing
+        # monsters hold still against it and he reads as walking onto them.
+        # The art's top and bottom edges agree to about 2% luminance, so the
+        # stone joins invisibly. What hangs off the surface is clipped, so
+        # the whole thing costs about one screenful.
+        #
+        # ponytail: the torches do NOT line up across the join. They repeat
+        # every ~223px but the wrap leaves a 387px gap, so their rhythm
+        # hitches once per loop, every 4-10s depending on wave. Fix, if it
+        # ever annoys anyone: crop _backdrop to a whole number of torch
+        # periods (rows 87..1203) in _load_art. The loop below already
+        # handles a tile shorter than the window, so that is the only change.
+        tile = _backdrop.get_height()
+        y = int(road_px(game)) % tile - tile
+        while y < WINDOW_H:
+            field.blit(_backdrop, (0, y))
+            y += tile
     _lanes(field)
     _walls(field, game.threats)
     _monsters(field, game.threats)
@@ -117,9 +282,15 @@ def _draw_field(field, game) -> None:
 
 
 def _lanes(field) -> None:
-    for lane in range(1, LANES):
-        x = lane * LANE_W
-        pygame.draw.line(field, GRID, (x, FIELD_TOP), (x, WINDOW_H), 2)
+    # With the art there is nothing to draw: its masonry already bounds the
+    # corridor, and its floor is one even tile grid, so a line ruled over it
+    # reads as UI laid on top of a picture rather than as part of the room.
+    if _backdrop is None:
+        # Both corridor edges too, not just the two splits: without the art
+        # there is nothing else to say where you may stand.
+        for lane in range(LANES + 1):
+            x = lane_left(lane)
+            pygame.draw.line(field, GRID, (x, FIELD_TOP), (x, WINDOW_H), 2)
     pygame.draw.line(field, GRID, (0, FIELD_TOP), (field.get_width(), FIELD_TOP), 2)
 
 
@@ -135,7 +306,7 @@ def _walls(field, threats) -> None:
     for parts in groups.values():
         lanes = [p.lane for p in parts]
         rect = pygame.Rect(
-            min(lanes) * LANE_W + 4,
+            lane_left(min(lanes)) + 4,
             int(screen_y(parts[0].y)) - WALL_H // 2,
             (max(lanes) - min(lanes) + 1) * LANE_W - 8,
             WALL_H,
@@ -153,7 +324,7 @@ def _monsters(field, threats) -> None:
         if threat.kind != "monster":
             continue
         cx, cy = lane_center(threat.lane), screen_y(threat.y)
-        shape_at(field, threat.shape, COLORS[threat.shape], cx, cy, MONSTER_SIZE)
+        _emblem(field, threat.shape, COLORS[threat.shape], cx, cy, MONSTER_SIZE)
         if threat.empowered:
             # ponytail: the glow pulses by fading the colour toward the
             # background instead of blitting a per-shape alpha surface. Same
@@ -167,24 +338,46 @@ def _bolts(field, bolts) -> None:
         color = COLORS[bolt.shape]
         cx, cy = lane_center(bolt.lane), screen_y(bolt.y)
         tail = screen_y(min(1.0, bolt.y + 0.06))
+        # The streak stays whether or not there is art: a bolt crosses the
+        # field in BOLT_TRAVEL_S, about 15 frames, and the trail is what makes
+        # it readable at that speed.
         pygame.draw.line(field, _fade(color, 0.55), (cx, cy), (cx, tail), 5)
-        pygame.draw.circle(field, color, (int(cx), int(cy)), BOLT_R)
+        art = _sprite(f"bolt_{bolt.shape}", BOLT_ART_H)
+        if art is None:
+            pygame.draw.circle(field, color, (int(cx), int(cy)), BOLT_R)
+        else:
+            field.blit(art, art.get_rect(center=(int(cx), int(cy))))
 
 
 def _player(field, game) -> None:
     # 10 Hz blink while invulnerable.
     if game.iframe_ms > 0 and int(game.t_ms / 50) % 2:
         return
-    cx, half = lane_center(game.player.lane), PLAYER_SIZE // 2
-    pygame.draw.polygon(
-        field,
-        PLAYER,
-        [
-            (cx, PLAYER_ROW_Y - half),
-            (cx + half, PLAYER_ROW_Y + half),
-            (cx - half, PLAYER_ROW_Y + half),
-        ],
-    )
+    cx = lane_center(game.player.lane)
+    # The stride is driven by ground covered, not by the clock, so the feet
+    # keep up on a fast wave and slow down on a slow one without a second knob.
+    name = f"player{int(road_px(game) / WALK_STEP_PX) % len(WALK)}"
+    if _sprite(name, PLAYER_ART_H) is None:
+        name = "player0"          # a part filled element/ must not flicker
+    sprite = _sprite(name, PLAYER_ART_H)
+    if sprite is None:
+        half = PLAYER_SIZE // 2
+        pygame.draw.polygon(
+            field,
+            PLAYER,
+            [
+                (cx, PLAYER_ROW_Y - half),
+                (cx + half, PLAYER_ROW_Y + half),
+                (cx - half, PLAYER_ROW_Y + half),
+            ],
+        )
+        return
+
+    # Standing on the row rather than centred on it. Centred is where the
+    # triangle was, but at 150px he then covered the controls hint. Collision
+    # is grid space, so where he sits is only ever cosmetic.
+    rect = sprite.get_rect(midbottom=(cx, PLAYER_ROW_Y))
+    field.blit(sprite, rect)
 
 
 def _fade(color, amount: float):
@@ -200,7 +393,6 @@ def _fade(color, amount: float):
 def _draw_hud(screen, game, source) -> None:
     _hearts(screen, game.player.hp)
     _score(screen, game)
-    _legend(screen, 26, WINDOW_H - 35, 34)
     if game.state == WAVE_BREAK:
         _wave_break(screen, game)
     elif game.state == GAME_OVER:
@@ -237,21 +429,25 @@ def _score(screen, game) -> None:
         screen.blit(combo, (FIELD_W - combo.get_width() - 26, 76))
 
 
-def _legend(screen, x, y, size) -> None:
-    """Always visible. Nobody memorises the cycle from a menu."""
-    step = size + 30
-    for i, shape in enumerate(CYCLE):
-        cx = x + size // 2 + i * step
-        shape_at(screen, shape, COLORS[shape], cx, y, size)
-        _arrow(screen, cx + size // 2 + 6, y, cx + step - size // 2 - 6, y)
-    # The cycle closes: the last arrow points at a repeat of the first shape.
-    cx = x + size // 2 + len(CYCLE) * step
-    shape_at(screen, CYCLE[0], COLORS[CYCLE[0]], cx, y, size, width=2)
+def _matchups(screen, top: int, size: int) -> None:
+    """Three rows: the spell you cast, and the monster it kills.
 
-
-def _legend_w(size: int) -> int:
-    """Total width of _legend, so callers can centre it."""
-    return size + len(CYCLE) * (size + 30)
+    Read off game.BEATS, so it cannot teach a pairing the rules do not play.
+    This replaced a strip of the cycle drawn as a chain, which stated the ring
+    correctly but left you to work the pairing out yourself mid wave. A row
+    just answers the question you actually have.
+    """
+    mid = FIELD_W // 2
+    for i, spell in enumerate(CYCLE):
+        y = top + i * MATCH_PITCH
+        beaten = BEATS[spell]
+        # The spell uses the bolt art, stored rotated head up, so the picture
+        # here is the picture you see coming out of the wand.
+        _emblem(screen, spell, COLORS[spell], mid - MATCH_GAP, y,
+                _content_h(f"bolt_{spell}", size), art=f"bolt_{spell}")
+        _arrow(screen, mid - 40, y, mid + 40, y)
+        _emblem(screen, beaten, COLORS[beaten], mid + MATCH_GAP, y,
+                _content_h(beaten, size))
 
 
 def _arrow(screen, x1, y1, x2, y2) -> None:
@@ -269,12 +465,16 @@ def _hint(screen, source) -> None:
 
 
 def _cooldown_bar(screen, game, source) -> None:
-    """Says why a keypress did nothing, above the player where you are looking."""
+    """Says why a keypress did nothing. Fills as the cast recharges.
+
+    Parked bottom left, in the slot the cycle legend used to hold, rather than
+    floating over the player. That keeps the lane clear, at the cost of no
+    longer sitting where your eyes already are -- hence the wider bar.
+    """
     fill = getattr(source, "cooldown", lambda: None)()
     if fill is None or game.state == GAME_OVER:
         return
-    x = lane_center(game.player.lane) - BAR_W // 2
-    y = PLAYER_ROW_Y - 104
+    x, y = 26, WINDOW_H - 52
     pygame.draw.rect(screen, WALL, pygame.Rect(x, y, BAR_W, BAR_H), 2)
     pygame.draw.rect(screen, WALL, (x + 2, y + 2, int((BAR_W - 4) * fill), BAR_H - 4))
 
@@ -293,8 +493,8 @@ def _misfire(screen, game) -> None:
 def _wave_break(screen, game) -> None:
     _wash(screen)
     _center(screen, _fonts["huge"], f"WAVE {game.wave}", 430, TEXT)
-    _legend(screen, (FIELD_W - _legend_w(64)) // 2, 650, 64)
-    _center(screen, _fonts["med"], f"{game.break_left:0.1f}", 775, EMPOWERED)
+    _matchups(screen, 600, MATCH_SIZE)
+    _center(screen, _fonts["med"], f"{game.break_left:0.1f}", 950, EMPOWERED)
 
 
 def _game_over(screen, game) -> None:
@@ -327,6 +527,8 @@ LANE_TINT = (80, 200, 130, 70)
 LANE_NAMES = ("LEFT", "CENTER", "RIGHT")
 WARN_H = 76
 WARN_BG = (250, 250, 252, 210)
+PANEL_INK = (34, 36, 48)              # drawn ON that light panel, so it stays
+                                      # dark while the rest of the palette is not
 CAM_LINE = (255, 255, 255)
 CAM_NOSE = (0, 230, 230)
 CAM_SHOULDER = (255, 220, 40)
@@ -453,7 +655,7 @@ def _wand_panel(screen, wand) -> None:
     # previous cast underneath it just gives you two shapes to read.
     screen.set_clip(rect)
     if len(live) > 1:
-        pygame.draw.lines(screen, PLAYER, False, _wand_points(rect, live), 5)
+        pygame.draw.lines(screen, PANEL_INK, False, _wand_points(rect, live), 5)
     elif age < WAND_FADE_S and len(last) > 1:
         pygame.draw.lines(
             screen, COLORS.get(name, WALL), False, _wand_points(rect, last), 5

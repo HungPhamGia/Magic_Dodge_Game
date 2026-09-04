@@ -88,11 +88,12 @@ class KeyboardSource:
             return None
         return 1.0 - (self.cool_until - self.t_ms) / span
 
+    '''
     def hint(self) -> str:
         """On screen controls, derived so rebinding the keys updates it."""
         keys = " ".join(pygame.key.name(key).upper() for key in SHAPE_KEYS)
-        return f"ARROWS  move        {keys}  cast"
-
+        return f"ARROWS  move        {keys}  cast"  
+    '''
     def reset(self, lane: int = 1) -> None:
         self.lane = lane
         self.cool_until = self.t_ms

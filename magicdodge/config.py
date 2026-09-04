@@ -32,7 +32,7 @@ PLAYER_ROW_Y = FIELD_BOTTOM       # derived: hits land where the player is drawn
 
 # --- player -------------------------------------------------------------------
 
-PLAYER_HP = 3                     # hearts. Raise for a more forgiving run
+PLAYER_HP = 5                     # hearts. Raise for a more forgiving run
 IFRAME_MS = 800                   # invulnerable after a hit, so one row = one heart
 
 # --- casting ------------------------------------------------------------------

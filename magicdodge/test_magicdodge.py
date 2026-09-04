@@ -761,6 +761,34 @@ def test_every_sprite_loads_and_a_frame_renders():
     pygame.quit()
 
 
+def test_a_bolt_cannot_pass_through_a_falling_monster():
+    """Both are moving, toward each other, so both have to be swept.
+
+    Sweeping only the bolt loses every crossing that falls between two frames.
+    That is threat_speed / (bolt_speed + threat_speed) of all shots -- measured
+    at 11% on wave 1 and 27% on wave 6 before the fix, and felt as spells
+    going straight through a monster. Every wave is checked because the rate
+    climbs with monster speed, so wave 1 alone would barely show it.
+    """
+    from .game import BOLT_SPEED
+
+    for wave in range(1, len(WAVES) + 1):
+        speed = 1.0 / wave_config(wave)["fall"]
+        # Step the monster's start across a full frame of its own travel, so
+        # some trial has to land in the gap between frames if one exists.
+        for i in range(40):
+            game = playing()
+            game.threats.append(monster(y=0.5 + i * speed / 60 / 40, speed=speed))
+            game.bolts.append(Bolt(lane=1, y=1.0, shape=killer("circle")))
+            for _ in range(600):
+                game.update(1 / 60)
+                if not game.threats or not game.bolts:
+                    break
+            assert not game.threats, (
+                f"wave {wave}: the bolt passed through a monster falling at "
+                f"{speed:.3f}/s (bolt {BOLT_SPEED:.2f}/s)")
+
+
 def test_the_start_screen_waits_for_the_watch():
     """A run must not begin, or be uploaded, on an invented heart rate trace."""
     from .game import MENU, WAVE_BREAK

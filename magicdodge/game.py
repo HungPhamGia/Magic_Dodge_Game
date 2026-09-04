@@ -355,7 +355,7 @@ class Game:
         for bolt in list(self.bolts):                                   # 4
             y_prev = bolt.y
             bolt.y -= BOLT_SPEED * dt
-            target = self._swept_target(bolt, y_prev)
+            target = self._swept_target(bolt, y_prev, dt)
             if target is not None:
                 self._resolve_hit(bolt, target)
                 self.bolts.remove(bolt)
@@ -398,11 +398,23 @@ class Game:
 
     # --- collision -----------------------------------------------------------
 
-    def _swept_target(self, bolt, y_prev):
-        """Nearest threat the bolt crossed this frame, so it cannot tunnel."""
+    def _swept_target(self, bolt, y_prev, dt):
+        """Nearest threat the bolt crossed this frame, so it cannot tunnel.
+
+        Both are moving, and toward each other, so both get swept. The bolt
+        covers [bolt.y, y_prev] and the threat is about to cover [t.y, t.y +
+        speed*dt] in step 5; they crossed if those overlap.
+
+        Sweeping only the bolt and treating the threat as the point it happens
+        to occupy right now loses every crossing that lands between two frames,
+        which is threat_speed / (bolt_speed + threat_speed) of them: measured
+        at 11% of shots on wave 1 and 27% on wave 6, felt as spells passing
+        straight through a monster.
+        """
         crossed = [
             t for t in self.threats
-            if t.lane == bolt.lane and bolt.y <= t.y <= y_prev
+            if t.lane == bolt.lane
+            and bolt.y <= t.y + t.speed * dt and t.y <= y_prev
         ]
         return max(crossed, key=lambda t: t.y) if crossed else None
 

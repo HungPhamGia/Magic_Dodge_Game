@@ -93,7 +93,7 @@ _scaled: dict = {}  # (name, height) -> surface at that height, or None
 _fill: dict = {}    # name -> how much of its canvas height is real content
 
 
-def frame(screen, game, source, camera=None, wand=None) -> None:
+def frame(screen, game, source, camera=None, wand=None, coach=None, hr=None) -> None:
     global _field
     if _field is None:
         _field = pygame.Surface((FIELD_W, WINDOW_H))
@@ -102,6 +102,7 @@ def frame(screen, game, source, camera=None, wand=None) -> None:
             med=pygame.font.SysFont(None, 62),
             lane=pygame.font.SysFont(None, 96),
             huge=pygame.font.SysFont(None, 124),
+            coach=pygame.font.SysFont(None, 34),
         )
         _load_art()
 
@@ -116,7 +117,7 @@ def frame(screen, game, source, camera=None, wand=None) -> None:
     else:
         screen.blit(_field, (0, 0))
 
-    _draw_hud(screen, game, source)
+    _draw_hud(screen, game, source, coach, hr)
     if camera is not None:
         _draw_camera(screen, camera)
     if wand is not None and camera is not None:
@@ -390,13 +391,14 @@ def _fade(color, amount: float):
 # =============================================================================
 
 
-def _draw_hud(screen, game, source) -> None:
+def _draw_hud(screen, game, source, coach=None, hr=None) -> None:
     _hearts(screen, game.player.hp)
     _score(screen, game)
+    _hr_readout(screen, hr)
     if game.state == WAVE_BREAK:
         _wave_break(screen, game)
     elif game.state == GAME_OVER:
-        _game_over(screen, game)
+        _game_over(screen, game, coach)
     # Above the wave break wash: the controls and the cooldown have to stay
     # readable through it.
     _hint(screen, source)
@@ -419,6 +421,14 @@ def _heart(screen, x, y, r, filled) -> None:
         (x + r, y - r * 0.1),
     ]
     pygame.draw.polygon(screen, BAD if filled else WALL, points, 0 if filled else 2)
+
+
+def _hr_readout(screen, hr) -> None:
+    """Live heart rate under the hearts, so the effort input is visible on screen."""
+    if hr is None:
+        return
+    line = _fonts["small"].render(f"{hr.current()} bpm", True, BAD)
+    screen.blit(line, (26, 82))
 
 
 def _score(screen, game) -> None:
@@ -497,12 +507,67 @@ def _wave_break(screen, game) -> None:
     _center(screen, _fonts["med"], f"{game.break_left:0.1f}", 950, EMPOWERED)
 
 
-def _game_over(screen, game) -> None:
+COACH_ACCENT = (120, 210, 255)       # the "AI Coach" heading colour
+
+
+def _game_over(screen, game, coach=None) -> None:
     _wash(screen)
-    _center(screen, _fonts["huge"], "GAME OVER", 470, BAD)
-    _center(screen, _fonts["med"], f"Score {game.score}", 603, TEXT)
-    _center(screen, _fonts["med"], f"Wave {game.wave}", 675, TEXT)
-    _center(screen, _fonts["small"], "Press R to restart", 775, TEXT)
+    _center(screen, _fonts["huge"], "GAME OVER", 250, BAD)
+    _center(screen, _fonts["med"], f"Score {game.score}", 380, TEXT)
+    _center(screen, _fonts["med"], f"Wave {game.wave}", 448, TEXT)
+    _coach_panel(screen, coach, 560)
+    _center(screen, _fonts["small"], "Press R to restart", WINDOW_H - 120, TEXT)
+
+
+def _coach_panel(screen, coach, top: int) -> None:
+    """The LLM coach's read-out, or its progress line while it thinks. Kept to
+    the game column width, wrapped, so a long paragraph never runs off the edge."""
+    if coach is None:
+        return
+    margin = 40
+    width = FIELD_W - margin * 2
+    _center(screen, _fonts["med"], "AI COACH", top, COACH_ACCENT)
+    y = top + 70
+
+    if coach.status != "ready" or not coach.feedback:
+        _center(screen, _fonts["small"], "analyzing your run...", y + 20, WALL)
+        return
+
+    fb = coach.feedback
+    y = _wrap(screen, fb.get("headline", ""), margin, y, width, _fonts["coach"], TEXT) + 14
+    for label, items, color in (("What went well", fb.get("did_well", []), COLORS["square"]),
+                                ("To improve", fb.get("improve", []), EMPOWERED)):
+        if not items:
+            continue
+        line = _fonts["coach"].render(label, True, color)
+        screen.blit(line, (margin, y))
+        y += line.get_height() + 4
+        for item in items:
+            y = _wrap(screen, "- " + item, margin + 10, y, width - 10, _fonts["coach"], TEXT) + 4
+        y += 8
+    if fb.get("effort"):
+        y = _wrap(screen, "Effort: " + fb["effort"], margin, y + 2, width, _fonts["coach"], BAD) + 6
+    if fb.get("tip"):
+        y = _wrap(screen, "Tip: " + fb["tip"], margin, y + 2, width, _fonts["coach"], COACH_ACCENT) + 4
+
+
+def _wrap(screen, text, x, y, width, font, color) -> int:
+    """Blit `text` word-wrapped to `width`, starting at (x, y). Returns the y
+    just past the last line, so callers can stack blocks."""
+    words = text.split()
+    line = ""
+    for word in words:
+        trial = f"{line} {word}".strip()
+        if font.size(trial)[0] > width and line:
+            screen.blit(font.render(line, True, color), (x, y))
+            y += font.get_height()
+            line = word
+        else:
+            line = trial
+    if line:
+        screen.blit(font.render(line, True, color), (x, y))
+        y += font.get_height()
+    return y
 
 
 def _wash(screen) -> None:

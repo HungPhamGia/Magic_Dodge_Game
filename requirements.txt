@@ -8,3 +8,19 @@ opencv-contrib-python==4.11.0.86
 # wand casting (inputs.WandSource). Also optional: --no-wand still plays,
 # and a missing board or busy port falls back to J K L on its own.
 pyserial==3.5
+
+# LLM coach (coach.py), the report's proposed post-run adaptive support, calls
+# OpenRouter over stdlib HTTP -- no package to install. Set OPENROUTER_API_KEY to
+# enable it (optionally OPENROUTER_MODEL). Without the key or internet, the game
+# falls back to a built-in offline coach so a run always ends with feedback.
+#
+# Heart rate (heart_rate.py) needs nothing extra: it simulates a wrist monitor
+# when no device is present, and feeds effort into the coach. To read a real BLE
+# watch instead, run with --hr-name (or --hr-device) and install bleak, which the
+# bridge (hr_device.py) uses to drive heart_rate_monitor.py:  pip install bleak
+# A missing watch or missing bleak just falls back to the simulated trace.
+#
+# Cloud upload (cloud.py) sends each session to a store chosen by env var.
+# Firebase (FIREBASE_DB_URL) uses stdlib HTTP; MongoDB (MONGODB_URI) needs pymongo,
+# installed only if you use Mongo:  pip install "pymongo>=4.6"
+# With neither set, sessions are written to magicdodge/logs/uploads.jsonl.

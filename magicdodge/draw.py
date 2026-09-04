@@ -338,22 +338,32 @@ def _column(field, x, yb, h, w, a, s, inner) -> None:
     on the road-facing side. No horizontal foot -- it just sinks into the wall."""
     x, w = int(x), max(3, int(w))
     top = int(yb - h)
-    sink = max(10, int(28 * s))                   # plunge deep into the edge wall
-    bottom = int(yb) + sink
-    hh = bottom - top
+    sink = max(16, int(44 * s))                   # long lower part reaching down to the floor
+    foot = int(yb) + sink                          # where the base foot rests
+    hh = foot - top
     light, mid, dark = _fade((162, 156, 156), a), _fade((120, 114, 118), a), _fade((78, 74, 82), a)
-    # shaft, straight down into the wall, rounded by three vertical shading bands
+    # contact shadow under the foot, so it reads as planted
+    sw2, sh2 = int(w * 2.6), max(5, int(0.05 * h))
+    shadow = pygame.Surface((sw2, sh2), pygame.SRCALPHA)
+    pygame.draw.ellipse(shadow, (0, 0, 0, int(160 * a)), shadow.get_rect())
+    field.blit(shadow, (x - sw2 // 2, foot - sh2 // 2 + max(2, int(4 * s))))
+    # shaft, long, down to the foot, rounded by three vertical shading bands
     pygame.draw.rect(field, mid, (x - w // 2, top, w, hh))
     pygame.draw.rect(field, light, (x - w // 2, top, max(1, w // 3), hh))
     pygame.draw.rect(field, dark, (x + w // 6, top, max(1, w // 3), hh))
     # brick courses
     seg = max(6, int(0.09 * h))
-    for by in range(top + seg, bottom, seg):
+    for by in range(top + seg, foot, seg):
         pygame.draw.line(field, dark, (x - w // 2, by), (x + w // 2, by), 1)
-    # capital at the top only (no base -- the shaft embeds into the wall)
+    # capital at the top
     cw, ch = int(w * 1.5), max(3, int(0.055 * h))
     pygame.draw.rect(field, light, (x - cw // 2, top - ch, cw, ch))
     pygame.draw.rect(field, dark, (x - cw // 2, top - ch, cw, ch), 1)
+    # base foot (the plinth), a wider stepped block resting on the floor
+    pw, ph = int(w * 1.8), max(4, int(0.07 * h))
+    pygame.draw.rect(field, mid, (x - pw // 2, foot - ph, pw, ph))
+    pygame.draw.rect(field, light, (x - pw // 2, foot - ph, pw, max(1, int(ph * 0.35))))
+    pygame.draw.rect(field, dark, (x - pw // 2, foot - ph, pw, ph), 1)
     # a flaming torch on the inner side, only once the column is solid enough
     if a > 0.4:
         fx = x + inner * int(w * 0.55)

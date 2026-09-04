@@ -380,6 +380,25 @@ def _column(field, x, yb, h, w, a, s, inner) -> None:
                              max(2, int(fr * 0.6)), max(2, int(fr * 1.1))))
 
 
+def _edge_wall(field) -> None:
+    """A low stone wall that runs down both edges of the road in perspective, so
+    the side columns read as posts of a railing on the walkway, not floating
+    poles. Starts past the sky-faded far end and thickens toward you."""
+    for side in (-1.55, 1.55):
+        top, bot = [], []
+        for i in range(14, 41):                 # t 0.35..1.0, on the solid floor
+            t = i / 40.0
+            x, y = _edge(side, t)
+            ch = max(2, 16 * _persp(t))          # low wall height, grows near
+            top.append((x, y - ch))
+            bot.append((x, y))
+        if len(top) < 2:
+            continue
+        pygame.draw.polygon(field, (86, 82, 96), top + bot[::-1])      # wall face
+        pygame.draw.lines(field, (142, 136, 150), False, top, 2)       # lit cap
+        pygame.draw.lines(field, (36, 34, 46), False, bot, 1)          # base line
+
+
 def _persp_columns(field, game) -> None:
     """Columns planted at fixed points along the road and carried by the SAME
     scroll as the floor, so they travel with the road toward you. Each enters
@@ -438,7 +457,8 @@ def _draw_field(field, game) -> None:
     if not _persp_backdrop(field, game):
         for off in (-1.5, -0.5, 0.5, 1.5):
             pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 2)
-    _persp_columns(field, game)                  # columns down both sides
+    _edge_wall(field)                            # low railing wall along both edges
+    _persp_columns(field, game)                  # columns rising from that railing
     for off in (-0.5, 0.5):                       # faint lane dividers
         pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 1)
     _walls(field, game.threats)

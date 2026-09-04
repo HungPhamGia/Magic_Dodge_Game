@@ -878,15 +878,18 @@ def _center(screen, font, text, y, color) -> None:
 CAM_X = FIELD_W                       # the panel starts where the game stops
 CAM_Y = FIELD_TOP                     # and lines up with the top of the field
 CAM_LANE_W = CAM_W // LANES
-LANE_TINT = (80, 200, 130, 70)
 LANE_NAMES = ("LEFT", "CENTER", "RIGHT")
 WARN_H = 76
-WARN_BG = (250, 250, 252, 210)
-PANEL_INK = (34, 36, 48)              # drawn ON that light panel, so it stays
-                                      # dark while the rest of the palette is not
-CAM_LINE = (255, 255, 255)
-CAM_NOSE = (0, 230, 230)
-CAM_SHOULDER = (255, 220, 40)
+CAM_GOLD = (214, 178, 94)             # the theme gold: frame, lanes, labels
+CAM_GOLD_BRIGHT = (247, 226, 150)
+CAM_GOLD_DIM = (150, 122, 64)
+CAM_INK = (16, 14, 30)               # dark panel, matching the field's night
+PANEL_INK = (34, 36, 48)
+LANE_TINT = (214, 178, 94, 55)        # gold wash on the active lane
+WARN_BG = (16, 14, 30, 215)           # dark warning band
+CAM_LINE = (214, 178, 94)             # gold lane splits
+CAM_NOSE = (120, 210, 255)            # cool nose marker
+CAM_SHOULDER = (247, 226, 150)        # bright gold shoulders
 
 _preview: tuple = (None, None)        # (bytes we converted, the surface we made)
 
@@ -895,23 +898,31 @@ def _draw_camera(screen, camera) -> None:
     data, points, lane, message = camera.snapshot()
     rect = pygame.Rect(CAM_X, CAM_Y, CAM_W, CAM_H)
 
-    pygame.draw.line(screen, GRID, (CAM_X, 0), (CAM_X, WINDOW_H), 2)
+    screen.fill(CAM_INK, pygame.Rect(CAM_X, 0, CAM_W, WINDOW_H))    # dark panel
+    pygame.draw.line(screen, CAM_GOLD, (CAM_X, 0), (CAM_X, WINDOW_H), 3)
     if data is None:
-        pygame.draw.rect(screen, GRID, rect)
+        pygame.draw.rect(screen, (28, 26, 44), rect)
+        _cam_center(screen, _fonts["med"], "CAMERA OFF", rect.centery - 30, CAM_GOLD_DIM)
     else:
         screen.blit(_preview_surface(data), rect.topleft)
+        veil = pygame.Surface(rect.size, pygame.SRCALPHA)          # tint into the theme
+        veil.fill((16, 14, 30, 55))
+        screen.blit(veil, rect.topleft)
 
     _cam_lanes(screen, rect, lane)
     if points:
         _cam_body(screen, points)
     if message:
         _cam_warning(screen, rect, message)
-    pygame.draw.rect(screen, WALL, rect, 2)
 
-    # One line under the video. A framing problem is drawn on the video itself,
-    # so the strip stays a strip.
+    # Gilt frame with corner studs, matching the overlay panels.
+    pygame.draw.rect(screen, CAM_GOLD, rect, 3)
+    pygame.draw.rect(screen, CAM_GOLD_DIM, rect.inflate(-10, -10), 1)
+    for corner in (rect.topleft, rect.topright, rect.bottomleft, rect.bottomright):
+        pygame.draw.circle(screen, CAM_GOLD_BRIGHT, corner, 6)
+
     label = LANE_NAMES[lane] if lane is not None else "--"
-    _cam_center(screen, _fonts["lane"], label, rect.bottom + 10, TEXT)
+    _cam_center(screen, _fonts["lane"], label, rect.bottom + 12, CAM_GOLD_BRIGHT)
 
 
 def _cam_warning(screen, rect, message) -> None:
@@ -919,6 +930,8 @@ def _cam_warning(screen, rect, message) -> None:
     band = pygame.Surface((rect.width, WARN_H), pygame.SRCALPHA)
     band.fill(WARN_BG)
     screen.blit(band, (rect.x, rect.bottom - WARN_H))
+    pygame.draw.line(screen, CAM_GOLD, (rect.x, rect.bottom - WARN_H),
+                     (rect.right, rect.bottom - WARN_H), 2)
     text = _fonts["med"].render(message, True, BAD)
     screen.blit(
         text,
@@ -966,8 +979,10 @@ def _cam_body(screen, points) -> None:
 
 
 def _cam_center(screen, font, text, y, color) -> None:
-    surface = font.render(text, True, color)
-    screen.blit(surface, (CAM_X + (CAM_W - surface.get_width()) // 2, y))
+    main = font.render(text, True, color)
+    x = CAM_X + (CAM_W - main.get_width()) // 2
+    screen.blit(font.render(text, True, (0, 0, 0)), (x + 2, y + 2))   # shadow
+    screen.blit(main, (x, y))
 
 
 # =============================================================================

@@ -334,21 +334,25 @@ def _sky():
 
 def _persp_columns(field, game) -> None:
     """Stone columns with torches down both sides of the road, receding to the
-    vanishing point and sliding toward you so you read as moving forward."""
+    vanishing point and sliding toward you (forward). Each fades in at the far
+    end and out at the near end, so wrapping around the loop never pops."""
     scroll = road_px(game)
-    n = 7
-    phase = (scroll * 0.5) % 1.0
-    for k in range(n):
-        t = ((k / n) + phase) % 1.0
+    n = 8
+    phase = (scroll * 0.35) % 1.0
+    for t in sorted(((k / n) + phase) % 1.0 for k in range(n)):   # far first
+        a = min(t / 0.18, (1.0 - t) / 0.12, 1.0)                  # fade both ends
+        if a <= 0.03:
+            continue
         s = _persp(t)
         h, w = int(340 * s), max(2, int(34 * s))
+        stone = _fade((74, 72, 94), a)
         for off in (-1.85, 1.85):
             x, yb = _edge(off, t)
-            pygame.draw.rect(field, (58, 56, 74), (int(x - w / 2), int(yb - h), w, h))
-            pygame.draw.rect(field, (34, 32, 44), (int(x - w / 2), int(yb - h), w, h), 1)
-            _blit_glow(field, (255, 178, 74), int(x), int(yb - h), max(8, int(30 * s)))
-            pygame.draw.circle(field, (255, 214, 140), (int(x), int(yb - h)),
-                               max(2, int(6 * s)))
+            pygame.draw.rect(field, stone, (int(x - w / 2), int(yb - h), w, h))
+            _blit_glow(field, (255, 178, 74), int(x), int(yb - h), max(6, int(30 * s * a)))
+            if a > 0.55:
+                pygame.draw.circle(field, (255, 214, 140), (int(x), int(yb - h)),
+                                   max(2, int(6 * s)))
 
 
 def _persp_backdrop(field, game) -> bool:
@@ -372,7 +376,10 @@ def _persp_backdrop(field, game) -> bool:
         if v + slice_h > sh:
             v = sh - slice_h
         strip = src.subsurface((0, v, sw, slice_h))
-        field.blit(pygame.transform.smoothscale(strip, (w, h)), (int(lx), int(ya)))
+        warped = pygame.transform.smoothscale(strip, (w, h))
+        if f0 < 0.32:                       # fade the far end into the starry sky
+            warped.set_alpha(int(255 * (f0 / 0.32)))
+        field.blit(warped, (int(lx), int(ya)))
     return True
 
 

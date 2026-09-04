@@ -98,6 +98,7 @@ SPRITES = {
 _field = None       # scratch surface for the shake, made on first frame
 _fonts: dict = {}
 _backdrop = None    # element/Background.png at field size, or None
+_sky_surf = None    # baked starry sky above the vanishing point
 _raw: dict = {}     # name -> the file as loaded
 _scaled: dict = {}  # (name, height) -> surface at that height, or None
 _fill: dict = {}    # name -> how much of its canvas height is real content
@@ -305,10 +306,55 @@ def _emblem(surface, shape, color, cx, cy, size, art=None) -> None:
 # =============================================================================
 
 
+def _blit_glow(surface, color, cx, cy, radius) -> None:
+    g = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+    for r in range(radius, 0, -2):
+        a = int(90 * (1 - r / radius) ** 2)
+        pygame.draw.circle(g, (*color, a), (radius, radius), r)
+    surface.blit(g, (int(cx) - radius, int(cy) - radius))
+
+
+def _sky():
+    """A baked night sky the corridor recedes into: stars, and a soft glow at the
+    vanishing point so the far end reads as opening onto the sky."""
+    global _sky_surf
+    if _sky_surf is None:
+        s = pygame.Surface((FIELD_W, WINDOW_H))
+        s.fill(BG)
+        rng = random.Random(7)
+        for _ in range(150):
+            x, y = rng.randint(0, FIELD_W), rng.randint(0, HORIZON + 120)
+            b = rng.randint(70, 180)
+            pygame.draw.circle(s, (b, b, min(255, b + 24)), (x, y),
+                               rng.choice([1, 1, 1, 2]))
+        _blit_glow(s, (150, 130, 210), FIELD_W // 2, int(HORIZON), 190)
+        _sky_surf = s
+    return _sky_surf
+
+
+def _persp_columns(field, game) -> None:
+    """Stone columns with torches down both sides of the road, receding to the
+    vanishing point and sliding toward you so you read as moving forward."""
+    scroll = road_px(game)
+    n = 7
+    phase = (scroll * 0.5) % 1.0
+    for k in range(n):
+        t = ((k / n) + phase) % 1.0
+        s = _persp(t)
+        h, w = int(340 * s), max(2, int(34 * s))
+        for off in (-1.85, 1.85):
+            x, yb = _edge(off, t)
+            pygame.draw.rect(field, (58, 56, 74), (int(x - w / 2), int(yb - h), w, h))
+            pygame.draw.rect(field, (34, 32, 44), (int(x - w / 2), int(yb - h), w, h), 1)
+            _blit_glow(field, (255, 178, 74), int(x), int(yb - h), max(8, int(30 * s)))
+            pygame.draw.circle(field, (255, 214, 140), (int(x), int(yb - h)),
+                               max(2, int(6 * s)))
+
+
 def _persp_backdrop(field, game) -> bool:
-    """Warp Hung's dungeon art into a receding trapezoid that runs back to a
-    vanishing point (the llm_update chase angle), scrolling with the walk. The
-    art is kept; only its projection changes."""
+    """Warp Hung's dungeon art into a receding trapezoid that runs back to the
+    vanishing point (the llm_update chase angle). The floor scrolls toward you so
+    you read as walking forward. Art is kept; only its projection changes."""
     if _backdrop is None:
         return False
     src = _backdrop
@@ -316,14 +362,13 @@ def _persp_backdrop(field, game) -> bool:
     scroll = int(road_px(game))
     n = 80
     slice_h = max(1, sh // n)
-    field.fill(BG)
     for i in range(n):
         f0, f1 = i / n, (i + 1) / n
         lx, ya = _edge(-1.7, f0)
         rx, _ = _edge(1.7, f0)
         _, yb = _edge(-1.7, f1)
         w, h = max(1, int(rx - lx)), max(1, int(yb - ya) + 1)
-        v = int(scroll + f0 * sh) % sh
+        v = int(f0 * sh - scroll) % sh          # subtract: floor flows toward you
         if v + slice_h > sh:
             v = sh - slice_h
         strip = src.subsurface((0, v, sw, slice_h))
@@ -332,13 +377,13 @@ def _persp_backdrop(field, game) -> bool:
 
 
 def _draw_field(field, game) -> None:
+    field.blit(_sky(), (0, 0))                   # starry sky the corridor opens onto
     if not _persp_backdrop(field, game):
-        field.fill(BG)
         for off in (-1.5, -0.5, 0.5, 1.5):
             pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 2)
-    else:
-        for off in (-0.5, 0.5):                 # faint lane dividers over the art
-            pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 1)
+    _persp_columns(field, game)                  # columns down both sides
+    for off in (-0.5, 0.5):                       # faint lane dividers
+        pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 1)
     _walls(field, game.threats)
     _monsters(field, game.threats)
     _bolts(field, game.bolts)

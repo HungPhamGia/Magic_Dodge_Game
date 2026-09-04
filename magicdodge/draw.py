@@ -393,8 +393,9 @@ def _persp_columns(field, game) -> None:
         if rel < 0.0 or rel > view:
             continue
         t = 1.0 - rel / view                # 0 far, 1 near -- moves with the road
-        a = max(0.0, min((view - rel) / (view * 0.30),   # fade in at the far end
-                         rel / (view * 0.14), 1.0))       # fade out as it nears
+        a = max(0.0, min((t - 0.34) / 0.20,   # appear only once on solid floor,
+                         (1.0 - t) / 0.14,      # not over the sky-faded far end
+                         1.0))                  # then fade out as it nears you
         if a <= 0.03:
             continue
         s = _persp(t)
@@ -462,11 +463,25 @@ def _walls(field, threats) -> None:
         rx = CXF + (max(lanes) - 0.5) * LANE_W * s
         h = max(10, int(WALL_H * s))
         rect = pygame.Rect(int(lx) + 3, int(y - h / 2), int(rx - lx) - 6, h)
-        pygame.draw.rect(field, WALL, rect)
+        # A stone brick barrier you cannot pass: brick courses with offset joints,
+        # a lit top, dark outline, and an amber warning cap.
+        stone, mortar, lit = (98, 92, 104), (50, 48, 60), (144, 138, 152)
+        pygame.draw.rect(field, stone, rect, border_radius=3)
+        pygame.draw.rect(field, lit, (rect.x, rect.y, rect.w, max(2, int(rect.h * 0.18))),
+                         border_radius=3)
+        bh = max(5, int(rect.h / 3))
         field.set_clip(rect)
-        for x in range(rect.left - h, rect.right, 18):
-            pygame.draw.line(field, BG, (x, rect.bottom), (x + h, rect.top), 3)
+        row = 0
+        for by in range(rect.y, rect.bottom + bh, bh):
+            pygame.draw.line(field, mortar, (rect.x, by), (rect.right, by), 2)
+            joff = bh if row % 2 else 0
+            for bx in range(rect.x - bh + joff, rect.right + bh, bh * 2):
+                pygame.draw.line(field, mortar, (bx, by), (bx, by + bh), 2)
+            row += 1
         field.set_clip(None)
+        pygame.draw.rect(field, (28, 26, 36), rect, 2, border_radius=3)
+        cap_h = max(2, int(rect.h * 0.14))
+        pygame.draw.rect(field, (214, 150, 44), (rect.x, rect.y - cap_h, rect.w, cap_h))
 
 
 def _monsters(field, threats) -> None:

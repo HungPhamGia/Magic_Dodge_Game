@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets — never commit API keys. Put OPENROUTER_API_KEY in your shell or a
+# local .env that stays out of git.
+.env
+*.key
+
+# Game session logs
+magicdodge/logs/
+element/

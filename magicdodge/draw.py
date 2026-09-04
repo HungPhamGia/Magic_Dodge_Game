@@ -147,10 +147,36 @@ def screen_y(grid_y: float) -> float:
 
 
 def _depth(grid_y: float) -> float:
-    """A 3D size cue on top of the art: a threat far up the corridor reads
-    smaller, one near you larger, so it feels like it rushes toward you. Only
-    the size changes, never the lane x, so it stays lined up with the art."""
+    """Kept for callers that only want a size cue."""
     return 0.60 + 0.55 * max(0.0, min(1.0, grid_y))
+
+
+# --- perspective (the llm_update chase angle) --------------------------------
+HORIZON = 250                        # y of the vanishing band
+PERSP = 3.2                          # convergence strength; higher = deeper
+SMIN = 1.0 / (1.0 + PERSP)
+CXF = FIELD_W / 2.0
+
+
+def _persp(t: float) -> float:
+    return 1.0 / (1.0 + PERSP * (1.0 - max(0.0, min(1.0, t))))
+
+
+def project(lane, t):
+    """Lane 0..2 and depth t (0 far at the gate, 1 near at your feet) to a screen
+    point and a scale, in perspective: lanes fan out from the vanishing point and
+    a sprite grows as it nears. The art sprites are drawn at these points."""
+    s = _persp(t)
+    y = HORIZON + (FIELD_BOTTOM - HORIZON) * (s - SMIN) / (1.0 - SMIN)
+    x = CXF + (lane - 1) * LANE_W * s
+    return x, y, s
+
+
+def _edge(off, t):
+    """A point on a rail of constant lane offset (in lane widths) at depth t."""
+    s = _persp(t)
+    y = HORIZON + (FIELD_BOTTOM - HORIZON) * (s - SMIN) / (1.0 - SMIN)
+    return CXF + off * LANE_W * s, y
 
 
 def road_px(game) -> float:
@@ -279,45 +305,44 @@ def _emblem(surface, shape, color, cx, cy, size, art=None) -> None:
 # =============================================================================
 
 
-def _draw_field(field, game) -> None:
+def _persp_backdrop(field, game) -> bool:
+    """Warp Hung's dungeon art into a receding trapezoid that runs back to a
+    vanishing point (the llm_update chase angle), scrolling with the walk. The
+    art is kept; only its projection changes."""
     if _backdrop is None:
+        return False
+    src = _backdrop
+    sw, sh = src.get_size()
+    scroll = int(road_px(game))
+    n = 80
+    slice_h = max(1, sh // n)
+    field.fill(BG)
+    for i in range(n):
+        f0, f1 = i / n, (i + 1) / n
+        lx, ya = _edge(-1.7, f0)
+        rx, _ = _edge(1.7, f0)
+        _, yb = _edge(-1.7, f1)
+        w, h = max(1, int(rx - lx)), max(1, int(yb - ya) + 1)
+        v = int(scroll + f0 * sh) % sh
+        if v + slice_h > sh:
+            v = sh - slice_h
+        strip = src.subsurface((0, v, sw, slice_h))
+        field.blit(pygame.transform.smoothscale(strip, (w, h)), (int(lx), int(ya)))
+    return True
+
+
+def _draw_field(field, game) -> None:
+    if not _persp_backdrop(field, game):
         field.fill(BG)
+        for off in (-1.5, -0.5, 0.5, 1.5):
+            pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 2)
     else:
-        # The road slides down at exactly the speed threats fall, so standing
-        # monsters hold still against it and he reads as walking onto them.
-        # The art's top and bottom edges agree to about 2% luminance, so the
-        # stone joins invisibly. What hangs off the surface is clipped, so
-        # the whole thing costs about one screenful.
-        #
-        # ponytail: the torches do NOT line up across the join. They repeat
-        # every ~223px but the wrap leaves a 387px gap, so their rhythm
-        # hitches once per loop, every 4-10s depending on wave. Fix, if it
-        # ever annoys anyone: crop _backdrop to a whole number of torch
-        # periods (rows 87..1203) in _load_art. The loop below already
-        # handles a tile shorter than the window, so that is the only change.
-        tile = _backdrop.get_height()
-        y = int(road_px(game)) % tile - tile
-        while y < WINDOW_H:
-            field.blit(_backdrop, (0, y))
-            y += tile
-    _lanes(field)
+        for off in (-0.5, 0.5):                 # faint lane dividers over the art
+            pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 1)
     _walls(field, game.threats)
     _monsters(field, game.threats)
     _bolts(field, game.bolts)
     _player(field, game)
-
-
-def _lanes(field) -> None:
-    # With the art there is nothing to draw: its masonry already bounds the
-    # corridor, and its floor is one even tile grid, so a line ruled over it
-    # reads as UI laid on top of a picture rather than as part of the room.
-    if _backdrop is None:
-        # Both corridor edges too, not just the two splits: without the art
-        # there is nothing else to say where you may stand.
-        for lane in range(LANES + 1):
-            x = lane_left(lane)
-            pygame.draw.line(field, GRID, (x, FIELD_TOP), (x, WINDOW_H), 2)
-    pygame.draw.line(field, GRID, (0, FIELD_TOP), (field.get_width(), FIELD_TOP), 2)
 
 
 def _walls(field, threats) -> None:
@@ -329,18 +354,17 @@ def _walls(field, threats) -> None:
             key = threat.group_id if threat.group_id is not None else id(threat)
             groups.setdefault(key, []).append(threat)
 
-    for parts in groups.values():
+    for parts in sorted(groups.values(), key=lambda g: g[0].y):
         lanes = [p.lane for p in parts]
-        rect = pygame.Rect(
-            lane_left(min(lanes)) + 4,
-            int(screen_y(parts[0].y)) - WALL_H // 2,
-            (max(lanes) - min(lanes) + 1) * LANE_W - 8,
-            WALL_H,
-        )
+        _, y, s = project(lanes[0], parts[0].y)
+        lx = CXF + (min(lanes) - 1.5) * LANE_W * s
+        rx = CXF + (max(lanes) - 0.5) * LANE_W * s
+        h = max(10, int(WALL_H * s))
+        rect = pygame.Rect(int(lx) + 3, int(y - h / 2), int(rx - lx) - 6, h)
         pygame.draw.rect(field, WALL, rect)
         field.set_clip(rect)
-        for x in range(rect.left - WALL_H, rect.right, 18):
-            pygame.draw.line(field, BG, (x, rect.bottom), (x + WALL_H, rect.top), 3)
+        for x in range(rect.left - h, rect.right, 18):
+            pygame.draw.line(field, BG, (x, rect.bottom), (x + h, rect.top), 3)
         field.set_clip(None)
 
 
@@ -349,8 +373,8 @@ def _monsters(field, threats) -> None:
     for threat in sorted(threats, key=lambda t: t.y):      # far first, near on top
         if threat.kind != "monster":
             continue
-        cx, cy = lane_center(threat.lane), screen_y(threat.y)
-        size = int(MONSTER_SIZE * _depth(threat.y))         # grows as it nears
+        cx, cy, s = project(threat.lane, threat.y)          # perspective place + scale
+        size = max(16, int(MONSTER_SIZE * s * 1.15))
         _emblem(field, threat.shape, COLORS[threat.shape], cx, cy, size)
         if threat.empowered:
             # ponytail: the glow pulses by fading the colour toward the
@@ -361,18 +385,14 @@ def _monsters(field, threats) -> None:
 
 
 def _bolts(field, bolts) -> None:
-    for bolt in bolts:
+    for bolt in sorted(bolts, key=lambda b: b.y):
         color = COLORS[bolt.shape]
-        cx, cy = lane_center(bolt.lane), screen_y(bolt.y)
-        d = _depth(bolt.y)                                   # smaller far, bigger near
-        tail = screen_y(min(1.0, bolt.y + 0.06))
-        # The streak stays whether or not there is art: a bolt crosses the
-        # field in BOLT_TRAVEL_S, about 15 frames, and the trail is what makes
-        # it readable at that speed.
-        pygame.draw.line(field, _fade(color, 0.55), (cx, cy), (cx, tail), max(3, int(5 * d)))
-        art = _sprite(f"bolt_{bolt.shape}", max(12, int(BOLT_ART_H * d)))
+        cx, cy, s = project(bolt.lane, bolt.y)              # perspective place + scale
+        x2, y2, _ = project(bolt.lane, min(1.0, bolt.y + 0.06))
+        pygame.draw.line(field, _fade(color, 0.55), (cx, cy), (x2, y2), max(2, int(5 * s)))
+        art = _sprite(f"bolt_{bolt.shape}", max(10, int(BOLT_ART_H * s * 1.1)))
         if art is None:
-            pygame.draw.circle(field, color, (int(cx), int(cy)), max(4, int(BOLT_R * d)))
+            pygame.draw.circle(field, color, (int(cx), int(cy)), max(3, int(BOLT_R * s)))
         else:
             field.blit(art, art.get_rect(center=(int(cx), int(cy))))
 
@@ -381,7 +401,7 @@ def _update_player_x(game) -> None:
     """Ease the drawn player x toward its lane and note when it changes, so he
     glides between lanes instead of snapping."""
     global _px, _plast_lane, _pdir, _pswitch_ms
-    target = lane_center(game.player.lane)
+    target = project(game.player.lane, 1.0)[0]
     if _px is None:
         _px, _plast_lane = float(target), game.player.lane
     if game.player.lane != _plast_lane:
@@ -415,8 +435,8 @@ def _player(field, game) -> None:
     if game.iframe_ms > 0 and int(game.t_ms / 50) % 2:
         return
     _update_player_x(game)
-    x = _px if _px is not None else lane_center(game.player.lane)
-    target = lane_center(game.player.lane)
+    x = _px if _px is not None else project(game.player.lane, 1.0)[0]
+    target = project(game.player.lane, 1.0)[0]
     # The stride is driven by ground covered, not by the clock, so the feet
     # keep up on a fast wave and slow down on a slow one without a second knob.
     name = f"player{int(road_px(game) / WALK_STEP_PX) % len(WALK)}"

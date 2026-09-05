@@ -98,9 +98,15 @@ SPRITES = {
 _field = None       # scratch surface for the shake, made on first frame
 _fonts: dict = {}
 _backdrop = None    # element/Background.png at field size, or None
+_sky_surf = None    # baked starry sky above the vanishing point
 _raw: dict = {}     # name -> the file as loaded
 _scaled: dict = {}  # (name, height) -> surface at that height, or None
 _fill: dict = {}    # name -> how much of its canvas height is real content
+
+_px = None          # the player's animated x, eased for a smooth lane-change glide
+_plast_lane = None  # last integer lane, to catch the moment a change happens
+_pdir = 0           # direction of the last change, for the motion trail
+_pswitch_ms = -10000  # tick of the last lane change, for the arrival spark
 
 
 def frame(screen, game, source, camera=None, wand=None, coach=None, hr=None) -> None:
@@ -139,6 +145,39 @@ def frame(screen, game, source, camera=None, wand=None, coach=None, hr=None) -> 
 
 def screen_y(grid_y: float) -> float:
     return FIELD_TOP + grid_y * (FIELD_BOTTOM - FIELD_TOP)
+
+
+def _depth(grid_y: float) -> float:
+    """Kept for callers that only want a size cue."""
+    return 0.60 + 0.55 * max(0.0, min(1.0, grid_y))
+
+
+# --- perspective (the llm_update chase angle) --------------------------------
+HORIZON = 250                        # y of the vanishing band
+PERSP = 3.2                          # convergence strength; higher = deeper
+SMIN = 1.0 / (1.0 + PERSP)
+CXF = FIELD_W / 2.0
+
+
+def _persp(t: float) -> float:
+    return 1.0 / (1.0 + PERSP * (1.0 - max(0.0, min(1.0, t))))
+
+
+def project(lane, t):
+    """Lane 0..2 and depth t (0 far at the gate, 1 near at your feet) to a screen
+    point and a scale, in perspective: lanes fan out from the vanishing point and
+    a sprite grows as it nears. The art sprites are drawn at these points."""
+    s = _persp(t)
+    y = HORIZON + (FIELD_BOTTOM - HORIZON) * (s - SMIN) / (1.0 - SMIN)
+    x = CXF + (lane - 1) * LANE_W * s
+    return x, y, s
+
+
+def _edge(off, t):
+    """A point on a rail of constant lane offset (in lane widths) at depth t."""
+    s = _persp(t)
+    y = HORIZON + (FIELD_BOTTOM - HORIZON) * (s - SMIN) / (1.0 - SMIN)
+    return CXF + off * LANE_W * s, y
 
 
 def road_px(game) -> float:
@@ -267,45 +306,165 @@ def _emblem(surface, shape, color, cx, cy, size, art=None) -> None:
 # =============================================================================
 
 
-def _draw_field(field, game) -> None:
+def _blit_glow(surface, color, cx, cy, radius) -> None:
+    g = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+    for r in range(radius, 0, -2):
+        a = int(90 * (1 - r / radius) ** 2)
+        pygame.draw.circle(g, (*color, a), (radius, radius), r)
+    surface.blit(g, (int(cx) - radius, int(cy) - radius))
+
+
+def _sky():
+    """A baked night sky the corridor recedes into: stars, and a soft glow at the
+    vanishing point so the far end reads as opening onto the sky."""
+    global _sky_surf
+    if _sky_surf is None:
+        s = pygame.Surface((FIELD_W, WINDOW_H))
+        s.fill(BG)
+        rng = random.Random(7)
+        for _ in range(150):
+            x, y = rng.randint(0, FIELD_W), rng.randint(0, HORIZON + 120)
+            b = rng.randint(70, 180)
+            pygame.draw.circle(s, (b, b, min(255, b + 24)), (x, y),
+                               rng.choice([1, 1, 1, 2]))
+        _blit_glow(s, (150, 130, 210), FIELD_W // 2, int(HORIZON), 190)
+        _sky_surf = s
+    return _sky_surf
+
+
+def _column(field, x, yb, h, w, a, s, inner) -> None:
+    """A stone column that plunges straight down into the road's edge wall: three
+    shading bands for roundness, brick courses, a capital on top, and a lit torch
+    on the road-facing side. No horizontal foot -- it just sinks into the wall."""
+    x, w = int(x), max(3, int(w))
+    top = int(yb - h)
+    sink = max(16, int(44 * s))                   # long lower part reaching down to the floor
+    foot = int(yb) + sink                          # where the base foot rests
+    hh = foot - top
+    light, mid, dark = _fade((162, 156, 156), a), _fade((120, 114, 118), a), _fade((78, 74, 82), a)
+    # contact shadow under the foot, so it reads as planted
+    sw2, sh2 = int(w * 2.6), max(5, int(0.05 * h))
+    shadow = pygame.Surface((sw2, sh2), pygame.SRCALPHA)
+    pygame.draw.ellipse(shadow, (0, 0, 0, int(160 * a)), shadow.get_rect())
+    field.blit(shadow, (x - sw2 // 2, foot - sh2 // 2 + max(2, int(4 * s))))
+    # shaft, long, down to the foot, rounded by three vertical shading bands
+    pygame.draw.rect(field, mid, (x - w // 2, top, w, hh))
+    pygame.draw.rect(field, light, (x - w // 2, top, max(1, w // 3), hh))
+    pygame.draw.rect(field, dark, (x + w // 6, top, max(1, w // 3), hh))
+    # brick courses
+    seg = max(6, int(0.09 * h))
+    for by in range(top + seg, foot, seg):
+        pygame.draw.line(field, dark, (x - w // 2, by), (x + w // 2, by), 1)
+    # capital at the top
+    cw, ch = int(w * 1.5), max(3, int(0.055 * h))
+    pygame.draw.rect(field, light, (x - cw // 2, top - ch, cw, ch))
+    pygame.draw.rect(field, dark, (x - cw // 2, top - ch, cw, ch), 1)
+    # base foot (the plinth), a wider stepped block resting on the floor
+    pw, ph = int(w * 1.8), max(4, int(0.07 * h))
+    pygame.draw.rect(field, mid, (x - pw // 2, foot - ph, pw, ph))
+    pygame.draw.rect(field, light, (x - pw // 2, foot - ph, pw, max(1, int(ph * 0.35))))
+    pygame.draw.rect(field, dark, (x - pw // 2, foot - ph, pw, ph), 1)
+    # a flaming torch on the inner side, only once the column is solid enough
+    if a > 0.4:
+        fx = x + inner * int(w * 0.55)
+        fy = top + int(0.17 * h)
+        flick = 0.8 + 0.35 * math.sin(pygame.time.get_ticks() / 90.0 + x * 0.3)
+        fr = max(3, int(9 * s * flick))
+        pygame.draw.line(field, (64, 46, 30), (x, fy), (fx, fy), max(2, int(3 * s)))
+        _blit_glow(field, (255, 168, 60), fx, fy - fr, int(fr * 3.4))
+        pygame.draw.ellipse(field, (238, 120, 34), (fx - fr, fy - fr * 3, fr * 2, fr * 3))
+        pygame.draw.ellipse(field, (255, 198, 74),
+                            (fx - int(fr * 0.6), fy - int(fr * 2.4), int(fr * 1.2), int(fr * 2)))
+        pygame.draw.ellipse(field, (255, 248, 200),
+                            (fx - max(1, int(fr * 0.3)), fy - int(fr * 1.6),
+                             max(2, int(fr * 0.6)), max(2, int(fr * 1.1))))
+
+
+def _edge_wall(field) -> None:
+    """A low stone wall that runs down both edges of the road in perspective, so
+    the side columns read as posts of a railing on the walkway, not floating
+    poles. Starts past the sky-faded far end and thickens toward you."""
+    for side in (-1.55, 1.55):
+        top, bot = [], []
+        for i in range(14, 41):                 # t 0.35..1.0, on the solid floor
+            t = i / 40.0
+            x, y = _edge(side, t)
+            ch = max(3, 26 * _persp(t))          # wall height, grows near
+            top.append((x, y - ch))
+            bot.append((x, y))
+        if len(top) < 2:
+            continue
+        pygame.draw.polygon(field, (120, 114, 118), top + bot[::-1])   # same stone as columns
+        pygame.draw.lines(field, (162, 156, 156), False, top, 2)       # lit cap, column light
+        pygame.draw.lines(field, (78, 74, 82), False, bot, 1)          # base, column dark
+
+
+def _persp_columns(field, game) -> None:
+    """Columns planted at fixed points along the road and carried by the SAME
+    scroll as the floor, so they travel with the road toward you. Each enters
+    faded at the far end and fades out as it nears, so nothing pops."""
+    R = road_px(game)                      # distance walked, same units as the floor
+    view = float(FIELD_BOTTOM - FIELD_TOP)  # one screenful of travel ahead
+    spacing = view / 5.0                    # gap between column pairs
+    first = int(R // spacing)
+    for m in range(first, first + 8):
+        rel = m * spacing - R               # how far ahead this column still is
+        if rel < 0.0 or rel > view:
+            continue
+        t = 1.0 - rel / view                # 0 far, 1 near -- moves with the road
+        a = max(0.0, min((t - 0.34) / 0.20,   # appear only once on solid floor,
+                         (1.0 - t) / 0.14,      # not over the sky-faded far end
+                         1.0))                  # then fade out as it nears you
+        if a <= 0.03:
+            continue
+        s = _persp(t)
+        h, w = 360 * s, max(3, int(42 * s))
+        for off, inner in ((-1.55, 1), (1.55, -1)):    # on the floor's edge, not beyond it
+            x, yb = _edge(off, t)
+            _column(field, x, yb, h, w, a, s, inner)
+
+
+def _persp_backdrop(field, game) -> bool:
+    """Warp Hung's dungeon art into a receding trapezoid that runs back to the
+    vanishing point (the llm_update chase angle). The floor scrolls toward you so
+    you read as walking forward. Art is kept; only its projection changes."""
     if _backdrop is None:
-        field.fill(BG)
-    else:
-        # The road slides down at exactly the speed threats fall, so standing
-        # monsters hold still against it and he reads as walking onto them.
-        # The art's top and bottom edges agree to about 2% luminance, so the
-        # stone joins invisibly. What hangs off the surface is clipped, so
-        # the whole thing costs about one screenful.
-        #
-        # ponytail: the torches do NOT line up across the join. They repeat
-        # every ~223px but the wrap leaves a 387px gap, so their rhythm
-        # hitches once per loop, every 4-10s depending on wave. Fix, if it
-        # ever annoys anyone: crop _backdrop to a whole number of torch
-        # periods (rows 87..1203) in _load_art. The loop below already
-        # handles a tile shorter than the window, so that is the only change.
-        tile = _backdrop.get_height()
-        y = int(road_px(game)) % tile - tile
-        while y < WINDOW_H:
-            field.blit(_backdrop, (0, y))
-            y += tile
-    _lanes(field)
+        return False
+    src = _backdrop
+    sw, sh = src.get_size()
+    scroll = int(road_px(game))
+    n = 80
+    slice_h = max(1, sh // n)
+    for i in range(n):
+        f0, f1 = i / n, (i + 1) / n
+        lx, ya = _edge(-1.7, f0)
+        rx, _ = _edge(1.7, f0)
+        _, yb = _edge(-1.7, f1)
+        w, h = max(1, int(rx - lx)), max(1, int(yb - ya) + 1)
+        v = int(f0 * sh - scroll) % sh          # subtract: floor flows toward you
+        if v + slice_h > sh:
+            v = sh - slice_h
+        strip = src.subsurface((0, v, sw, slice_h))
+        warped = pygame.transform.smoothscale(strip, (w, h))
+        if f0 < 0.32:                       # fade the far end into the starry sky
+            warped.set_alpha(int(255 * (f0 / 0.32)))
+        field.blit(warped, (int(lx), int(ya)))
+    return True
+
+
+def _draw_field(field, game) -> None:
+    field.blit(_sky(), (0, 0))                   # starry sky the corridor opens onto
+    if not _persp_backdrop(field, game):
+        for off in (-1.5, -0.5, 0.5, 1.5):
+            pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 2)
+    _edge_wall(field)                            # low railing wall along both edges
+    _persp_columns(field, game)                  # columns rising from that railing
+    for off in (-0.5, 0.5):                       # faint lane dividers
+        pygame.draw.line(field, GRID, _edge(off, 0.0), _edge(off, 1.0), 1)
     _walls(field, game.threats)
     _monsters(field, game.threats)
     _bolts(field, game.bolts)
     _player(field, game)
-
-
-def _lanes(field) -> None:
-    # With the art there is nothing to draw: its masonry already bounds the
-    # corridor, and its floor is one even tile grid, so a line ruled over it
-    # reads as UI laid on top of a picture rather than as part of the room.
-    if _backdrop is None:
-        # Both corridor edges too, not just the two splits: without the art
-        # there is nothing else to say where you may stand.
-        for lane in range(LANES + 1):
-            x = lane_left(lane)
-            pygame.draw.line(field, GRID, (x, FIELD_TOP), (x, WINDOW_H), 2)
-    pygame.draw.line(field, GRID, (0, FIELD_TOP), (field.get_width(), FIELD_TOP), 2)
 
 
 def _walls(field, threats) -> None:
@@ -317,81 +476,128 @@ def _walls(field, threats) -> None:
             key = threat.group_id if threat.group_id is not None else id(threat)
             groups.setdefault(key, []).append(threat)
 
-    for parts in groups.values():
+    for parts in sorted(groups.values(), key=lambda g: g[0].y):
         lanes = [p.lane for p in parts]
-        rect = pygame.Rect(
-            lane_left(min(lanes)) + 4,
-            int(screen_y(parts[0].y)) - WALL_H // 2,
-            (max(lanes) - min(lanes) + 1) * LANE_W - 8,
-            WALL_H,
-        )
-        pygame.draw.rect(field, WALL, rect)
+        _, y, s = project(lanes[0], parts[0].y)
+        lx = CXF + (min(lanes) - 1.5) * LANE_W * s
+        rx = CXF + (max(lanes) - 0.5) * LANE_W * s
+        h = max(10, int(WALL_H * s))
+        rect = pygame.Rect(int(lx) + 3, int(y - h / 2), int(rx - lx) - 6, h)
+        # A stone brick barrier you cannot pass: brick courses with offset joints,
+        # a lit top, dark outline, and an amber warning cap.
+        stone, mortar, lit = (98, 92, 104), (50, 48, 60), (144, 138, 152)
+        pygame.draw.rect(field, stone, rect, border_radius=3)
+        pygame.draw.rect(field, lit, (rect.x, rect.y, rect.w, max(2, int(rect.h * 0.18))),
+                         border_radius=3)
+        bh = max(5, int(rect.h / 3))
         field.set_clip(rect)
-        for x in range(rect.left - WALL_H, rect.right, 18):
-            pygame.draw.line(field, BG, (x, rect.bottom), (x + WALL_H, rect.top), 3)
+        row = 0
+        for by in range(rect.y, rect.bottom + bh, bh):
+            pygame.draw.line(field, mortar, (rect.x, by), (rect.right, by), 2)
+            joff = bh if row % 2 else 0
+            for bx in range(rect.x - bh + joff, rect.right + bh, bh * 2):
+                pygame.draw.line(field, mortar, (bx, by), (bx, by + bh), 2)
+            row += 1
         field.set_clip(None)
+        pygame.draw.rect(field, (28, 26, 36), rect, 2, border_radius=3)
+        cap_h = max(2, int(rect.h * 0.14))
+        pygame.draw.rect(field, (214, 150, 44), (rect.x, rect.y - cap_h, rect.w, cap_h))
 
 
 def _monsters(field, threats) -> None:
     pulse = 0.55 + 0.45 * math.sin(pygame.time.get_ticks() / 260.0)
-    for threat in threats:
+    for threat in sorted(threats, key=lambda t: t.y):      # far first, near on top
         if threat.kind != "monster":
             continue
-        cx, cy = lane_center(threat.lane), screen_y(threat.y)
-        _emblem(field, threat.shape, COLORS[threat.shape], cx, cy, MONSTER_SIZE)
+        cx, cy, s = project(threat.lane, threat.y)          # perspective place + scale
+        size = max(16, int(MONSTER_SIZE * s * 1.15))
+        _emblem(field, threat.shape, COLORS[threat.shape], cx, cy, size)
         if threat.empowered:
             # ponytail: the glow pulses by fading the colour toward the
             # background instead of blitting a per-shape alpha surface. Same
             # read at a glance, one line instead of a surface per monster.
             glow = _fade(EMPOWERED, 0.6 + 0.4 * pulse)
-            shape_at(field, threat.shape, glow, cx, cy, MONSTER_SIZE + 10, width=3)
+            shape_at(field, threat.shape, glow, cx, cy, size + 10, width=3)
 
 
 def _bolts(field, bolts) -> None:
-    for bolt in bolts:
+    for bolt in sorted(bolts, key=lambda b: b.y):
         color = COLORS[bolt.shape]
-        cx, cy = lane_center(bolt.lane), screen_y(bolt.y)
-        tail = screen_y(min(1.0, bolt.y + 0.06))
-        # The streak stays whether or not there is art: a bolt crosses the
-        # field in BOLT_TRAVEL_S, about 15 frames, and the trail is what makes
-        # it readable at that speed.
-        pygame.draw.line(field, _fade(color, 0.55), (cx, cy), (cx, tail), 5)
-        art = _sprite(f"bolt_{bolt.shape}", BOLT_ART_H)
+        cx, cy, s = project(bolt.lane, bolt.y)              # perspective place + scale
+        x2, y2, _ = project(bolt.lane, min(1.0, bolt.y + 0.06))
+        pygame.draw.line(field, _fade(color, 0.55), (cx, cy), (x2, y2), max(2, int(5 * s)))
+        art = _sprite(f"bolt_{bolt.shape}", max(10, int(BOLT_ART_H * s * 1.1)))
         if art is None:
-            pygame.draw.circle(field, color, (int(cx), int(cy)), BOLT_R)
+            pygame.draw.circle(field, color, (int(cx), int(cy)), max(3, int(BOLT_R * s)))
         else:
             field.blit(art, art.get_rect(center=(int(cx), int(cy))))
+
+
+def _update_player_x(game) -> None:
+    """Ease the drawn player x toward its lane and note when it changes, so he
+    glides between lanes instead of snapping."""
+    global _px, _plast_lane, _pdir, _pswitch_ms
+    target = project(game.player.lane, 1.0)[0]
+    if _px is None:
+        _px, _plast_lane = float(target), game.player.lane
+    if game.player.lane != _plast_lane:
+        _pdir = 1 if game.player.lane > _plast_lane else -1
+        _pswitch_ms = pygame.time.get_ticks()
+        _plast_lane = game.player.lane
+    _px += (target - _px) * 0.20
+
+
+def _lane_spark(field, x, y, p) -> None:
+    """A ring of sparks that flies out when a lane is taken (p is 0..1)."""
+    for i in range(8):
+        a = math.pi * 2 * i / 8
+        r = 24 + 70 * p
+        dot = pygame.Surface((8, 8), pygame.SRCALPHA)
+        pygame.draw.circle(dot, (255, 220, 120, int(210 * (1 - p))), (4, 4), 3)
+        field.blit(dot, (int(x + r * math.cos(a)) - 4, int(y + r * 0.45 * math.sin(a)) - 4))
+
+
+def _player_triangle(field, cx, alpha) -> None:
+    """The fallback player, as a translucent triangle (alpha for the trail)."""
+    half = PLAYER_SIZE // 2
+    surf = pygame.Surface((PLAYER_SIZE, PLAYER_SIZE), pygame.SRCALPHA)
+    pygame.draw.polygon(surf, (*PLAYER, alpha),
+                        [(half, 0), (PLAYER_SIZE, PLAYER_SIZE), (0, PLAYER_SIZE)])
+    field.blit(surf, (int(cx) - half, PLAYER_ROW_Y - PLAYER_SIZE + half))
 
 
 def _player(field, game) -> None:
     # 10 Hz blink while invulnerable.
     if game.iframe_ms > 0 and int(game.t_ms / 50) % 2:
         return
-    cx = lane_center(game.player.lane)
+    _update_player_x(game)
+    x = _px if _px is not None else project(game.player.lane, 1.0)[0]
+    target = project(game.player.lane, 1.0)[0]
     # The stride is driven by ground covered, not by the clock, so the feet
     # keep up on a fast wave and slow down on a slow one without a second knob.
     name = f"player{int(road_px(game) / WALK_STEP_PX) % len(WALK)}"
     if _sprite(name, PLAYER_ART_H) is None:
         name = "player0"          # a part filled element/ must not flicker
     sprite = _sprite(name, PLAYER_ART_H)
-    if sprite is None:
-        half = PLAYER_SIZE // 2
-        pygame.draw.polygon(
-            field,
-            PLAYER,
-            [
-                (cx, PLAYER_ROW_Y - half),
-                (cx + half, PLAYER_ROW_Y + half),
-                (cx - half, PLAYER_ROW_Y + half),
-            ],
-        )
-        return
 
-    # Standing on the row rather than centred on it. Centred is where the
-    # triangle was, but at 150px he then covered the controls hint. Collision
-    # is grid space, so where he sits is only ever cosmetic.
-    rect = sprite.get_rect(midbottom=(cx, PLAYER_ROW_Y))
-    field.blit(sprite, rect)
+    if abs(target - x) > 4:                          # motion trail during a glide
+        for i, a in ((1, 90), (2, 46)):
+            gx = int(x - _pdir * i * 20)
+            if sprite is None:
+                _player_triangle(field, gx, a)
+            else:
+                ghost = sprite.copy()
+                ghost.set_alpha(a)
+                field.blit(ghost, ghost.get_rect(midbottom=(gx, PLAYER_ROW_Y)))
+
+    if sprite is None:
+        _player_triangle(field, int(x), 255)
+    else:
+        field.blit(sprite, sprite.get_rect(midbottom=(int(x), PLAYER_ROW_Y)))
+
+    age = pygame.time.get_ticks() - _pswitch_ms      # arrival spark
+    if age < 320:
+        _lane_spark(field, target, PLAYER_ROW_Y, age / 320.0)
 
 
 def _fade(color, amount: float):
@@ -672,15 +878,18 @@ def _center(screen, font, text, y, color) -> None:
 CAM_X = FIELD_W                       # the panel starts where the game stops
 CAM_Y = FIELD_TOP                     # and lines up with the top of the field
 CAM_LANE_W = CAM_W // LANES
-LANE_TINT = (80, 200, 130, 70)
 LANE_NAMES = ("LEFT", "CENTER", "RIGHT")
 WARN_H = 76
-WARN_BG = (250, 250, 252, 210)
-PANEL_INK = (34, 36, 48)              # drawn ON that light panel, so it stays
-                                      # dark while the rest of the palette is not
-CAM_LINE = (255, 255, 255)
-CAM_NOSE = (0, 230, 230)
-CAM_SHOULDER = (255, 220, 40)
+CAM_GOLD = (214, 178, 94)             # the theme gold: frame, lanes, labels
+CAM_GOLD_BRIGHT = (247, 226, 150)
+CAM_GOLD_DIM = (150, 122, 64)
+CAM_INK = (16, 14, 30)               # dark panel, matching the field's night
+PANEL_INK = (34, 36, 48)
+LANE_TINT = (214, 178, 94, 55)        # gold wash on the active lane
+WARN_BG = (16, 14, 30, 215)           # dark warning band
+CAM_LINE = (214, 178, 94)             # gold lane splits
+CAM_NOSE = (120, 210, 255)            # cool nose marker
+CAM_SHOULDER = (247, 226, 150)        # bright gold shoulders
 
 _preview: tuple = (None, None)        # (bytes we converted, the surface we made)
 
@@ -689,23 +898,31 @@ def _draw_camera(screen, camera) -> None:
     data, points, lane, message = camera.snapshot()
     rect = pygame.Rect(CAM_X, CAM_Y, CAM_W, CAM_H)
 
-    pygame.draw.line(screen, GRID, (CAM_X, 0), (CAM_X, WINDOW_H), 2)
+    screen.fill(CAM_INK, pygame.Rect(CAM_X, 0, CAM_W, WINDOW_H))    # dark panel
+    pygame.draw.line(screen, CAM_GOLD, (CAM_X, 0), (CAM_X, WINDOW_H), 3)
     if data is None:
-        pygame.draw.rect(screen, GRID, rect)
+        pygame.draw.rect(screen, (28, 26, 44), rect)
+        _cam_center(screen, _fonts["med"], "CAMERA OFF", rect.centery - 30, CAM_GOLD_DIM)
     else:
         screen.blit(_preview_surface(data), rect.topleft)
+        veil = pygame.Surface(rect.size, pygame.SRCALPHA)          # tint into the theme
+        veil.fill((16, 14, 30, 55))
+        screen.blit(veil, rect.topleft)
 
     _cam_lanes(screen, rect, lane)
     if points:
         _cam_body(screen, points)
     if message:
         _cam_warning(screen, rect, message)
-    pygame.draw.rect(screen, WALL, rect, 2)
 
-    # One line under the video. A framing problem is drawn on the video itself,
-    # so the strip stays a strip.
+    # Gilt frame with corner studs, matching the overlay panels.
+    pygame.draw.rect(screen, CAM_GOLD, rect, 3)
+    pygame.draw.rect(screen, CAM_GOLD_DIM, rect.inflate(-10, -10), 1)
+    for corner in (rect.topleft, rect.topright, rect.bottomleft, rect.bottomright):
+        pygame.draw.circle(screen, CAM_GOLD_BRIGHT, corner, 6)
+
     label = LANE_NAMES[lane] if lane is not None else "--"
-    _cam_center(screen, _fonts["lane"], label, rect.bottom + 10, TEXT)
+    _cam_center(screen, _fonts["lane"], label, rect.bottom + 12, CAM_GOLD_BRIGHT)
 
 
 def _cam_warning(screen, rect, message) -> None:
@@ -713,6 +930,8 @@ def _cam_warning(screen, rect, message) -> None:
     band = pygame.Surface((rect.width, WARN_H), pygame.SRCALPHA)
     band.fill(WARN_BG)
     screen.blit(band, (rect.x, rect.bottom - WARN_H))
+    pygame.draw.line(screen, CAM_GOLD, (rect.x, rect.bottom - WARN_H),
+                     (rect.right, rect.bottom - WARN_H), 2)
     text = _fonts["med"].render(message, True, BAD)
     screen.blit(
         text,
@@ -760,8 +979,10 @@ def _cam_body(screen, points) -> None:
 
 
 def _cam_center(screen, font, text, y, color) -> None:
-    surface = font.render(text, True, color)
-    screen.blit(surface, (CAM_X + (CAM_W - surface.get_width()) // 2, y))
+    main = font.render(text, True, color)
+    x = CAM_X + (CAM_W - main.get_width()) // 2
+    screen.blit(font.render(text, True, (0, 0, 0)), (x + 2, y + 2))   # shadow
+    screen.blit(main, (x, y))
 
 
 # =============================================================================

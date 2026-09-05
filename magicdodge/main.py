@@ -8,6 +8,7 @@ Run from the repo root with:
     python -m magicdodge.main --no-camera --no-wand    keyboard only
     python -m magicdodge.main --hr-name Band  narrow the watch scan by name
     python -m magicdodge.main --no-hr         play without a heart rate watch
+    python -m magicdodge.main --sim-hr        fake heart rate, skip the watch wait
     python -m magicdodge.main --windowed      in a window, for debugging
 
 The camera, the wand and the heart rate watch are all on by default and all
@@ -131,6 +132,60 @@ def open_wand(port: str):
     return wand
 
 
+def start_music(path: str | None = None, use_music: bool = True) -> None:
+    """Loop a background track. Copyright stays out of the repo: the game plays a
+    file you drop into the music/ folder (or one named with --music), and simply
+    stays silent if there is none. Harry Potter's own theme is not shipped."""
+    if not use_music:
+        return
+    import glob
+    try:
+        pygame.mixer.init()
+    except Exception as error:
+        print(f"No audio device ({error}); playing without music.")
+        return
+    candidates = [path] if path else []
+    if not path:
+        folder = Path(__file__).parent.parent / "music"
+        for ext in ("ogg", "mp3", "wav"):
+            candidates += sorted(glob.glob(str(folder / f"*.{ext}")))
+    for name in candidates:
+        try:
+            pygame.mixer.music.load(name)
+            pygame.mixer.music.set_volume(0.5)
+            pygame.mixer.music.play(-1)              # loop forever
+            print(f"Music: {name}")
+            return
+        except Exception:
+            continue
+    print("No music found. Drop a track (e.g. the Harry Potter theme) into the "
+          "'music' folder as music/theme.mp3 or theme.ogg to play it.")
+
+
+def make_ting():
+    """A short bell 'ting', synthesised so it needs no audio file. Played on a
+    kill. Returns None if numpy or the mixer is unavailable."""
+    try:
+        import numpy as np
+        init = pygame.mixer.get_init()
+        if not init:
+            return None
+        sr, _, chans = init
+        dur = 0.32
+        t = np.linspace(0, dur, int(sr * dur), False)
+        f = 988.0                                   # a bright B5 bell
+        wave = (np.sin(2 * np.pi * f * t)
+                + 0.5 * np.sin(2 * np.pi * 2 * f * t)
+                + 0.25 * np.sin(2 * np.pi * 3 * f * t))
+        wave *= np.exp(-t * 11)                     # quick decay = a 'ting'
+        wave = (wave / (np.max(np.abs(wave)) + 1e-9) * 0.55 * 32767).astype(np.int16)
+        buf = np.repeat(wave.reshape(-1, 1), chans, axis=1) if chans > 1 else wave
+        return pygame.sndarray.make_sound(np.ascontiguousarray(buf))
+    except Exception as error:
+        print(f"No sound effects ({error}).")
+        return None
+
+
 def main(
     camera_id: int | None = CAM_ID,
     confidence: float = CAM_CONFIDENCE,
@@ -139,11 +194,16 @@ def main(
     hr_device: str | None = None,
     hr_name: str | None = None,
     use_hr: bool = True,
+    music: str | None = None,
+    use_music: bool = True,
 ) -> None:
     camera = open_camera(camera_id, confidence) if camera_id is not None else None
     wand = open_wand(wand_port) if wand_port is not None else None
 
     pygame.init()
+    start_music(music, use_music)
+    ting = make_ting() if use_music else None       # 'ting' on each kill
+    last_kills = 0
     # SCALED renders at this fixed size and lets SDL fit it to the display, so
     # every coordinate in config.py stays a plain number. Without a camera the
     # game column is the whole surface and simply gets bars either side.
@@ -180,6 +240,12 @@ def main(
         while not keyboard.quit:
             dt = clock.tick(FPS) / 1000.0
             game.update(dt)
+            # A 'ting' whenever the kill count goes up. It resets to 0 each wave,
+            # so a wave change is a decrease and never fires a false ting.
+            kills = getattr(game, "stats", {}).get("kills", 0)
+            if ting is not None and kills > last_kills:
+                ting.play()
+            last_kills = kills
             heart.update(dt, game)   # sample the heart rate against the game state
             # The camera may have moved the player, so the keyboard's own idea
             # of the lane has to follow or the next keypress snaps it back.
@@ -241,6 +307,12 @@ if __name__ == "__main__":
                         help="narrow the watch scan by name substring, e.g. Band")
     parser.add_argument("--no-hr", action="store_true",
                         help="play without a heart rate watch (skips the wait)")
+    parser.add_argument("--sim-hr", action="store_true",
+                        help="skip the watch wait and use a simulated (fake) heart "
+                             "rate, for testing without a device")
+    parser.add_argument("--music", default=None,
+                        help="path to a music file to loop (else music/ is scanned)")
+    parser.add_argument("--no-music", action="store_true", help="play without music")
     args = parser.parse_args()
     main(
         None if args.no_camera else args.camera,
@@ -249,5 +321,7 @@ if __name__ == "__main__":
         wand_port=None if args.no_wand else args.wand,
         hr_device=args.hr_device,
         hr_name=args.hr_name,
-        use_hr=not args.no_hr,
+        use_hr=not (args.no_hr or args.sim_hr),
+        music=args.music,
+        use_music=not args.no_music,
     )

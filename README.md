@@ -230,5 +230,5 @@ python -m magicdodge.test_magicdodge
 ```
 
 Each session writes `magicdodge/logs/session_<ts>.jsonl`, one line per cast plus a summary per
-wave — what was cast, at what confidence, and what it hit. Those logs and `element/` are
+wave - what was cast, at what confidence, and what it hit. Those logs and `element/` are
 gitignored.
